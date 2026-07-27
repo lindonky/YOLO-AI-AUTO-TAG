@@ -2,7 +2,7 @@
 
 项目名称：YOLO Auto-Tag
 
-版本：V0.1
+版本：V0.5
 
 项目仓库：https://github.com/lindonky/YOLO-AI-AUTO-TAG
 

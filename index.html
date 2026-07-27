@@ -54,6 +54,17 @@
             <input type="file" id="classesInput" accept=".txt" class="hidden">
         </label>
         <div class="border-t dark:border-gray-700 my-1"></div>
+        <div class="px-2 py-1 text-[10px] uppercase font-bold text-gray-400 tracking-wider">任务存档</div>
+        <button id="exportTaskQuickBtn" class="block w-full text-left px-3 py-2 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-gray-700 rounded transition flex items-center gap-2">
+            <svg class="h-4 w-4 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+            导出任务包（可恢复）
+        </button>
+        <label class="cursor-pointer block w-full text-left px-3 py-2 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 rounded transition flex items-center gap-2">
+            <svg class="h-4 w-4 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m4-4l-4-4m0 0l-4 4m4-4v12" /></svg>
+            导入任务包
+            <input type="file" id="importTaskQuickInput" accept=".zip" class="hidden">
+        </label>
+        <div class="border-t dark:border-gray-700 my-1"></div>
         <div class="px-2 py-1 text-[10px] uppercase font-bold text-gray-400 tracking-wider">直接导出结果</div>
         <button id="exportAllTransparentBtn" class="block w-full text-left px-3 py-2 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 rounded">导出所有透明图</button>
         <button id="exportAllCropBtn" class="block w-full text-left px-3 py-2 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 rounded">导出所有截取图</button>

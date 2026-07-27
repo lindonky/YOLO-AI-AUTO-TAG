@@ -1,14 +1,14 @@
-# YOLO Auto-Tag V0.1 文案定稿
+# YOLO Auto-Tag V0.5 文案定稿
 
-状态：**已由作者确认，可用于 V0.1 公开测试版。**
+状态：**已由作者确认，可用于 V0.5 公开版。**
 
 ## 品牌与版本
 
 - 应用名称：`YOLO Auto-Tag`
-- 版本单独显示：`V0.1`
+- 版本单独显示：`V0.5`
 - 可执行文件：`YOLOAutoTag.exe`
-- 安装包：`YOLO_Auto_Tag_V0.1_Setup.exe`
-- 应用窗口标题：`YOLO Auto-Tag · V0.1`
+- 安装包：`YOLO_Auto_Tag_V0.5_Setup.exe`
+- 应用窗口标题：`YOLO Auto-Tag · V0.5`
 - 桌面快捷方式：`YOLO Auto-Tag`
 
 ## 作者与联系
@@ -20,7 +20,7 @@
 
 ## 应用左下角
 
-显示版本徽标 `V0.1`，并显示可点击的项目仓库链接：
+显示版本徽标 `V0.5`，并显示可点击的项目仓库链接：
 
 ```text
 lindonky/YOLO-AI-AUTO-TAG
@@ -36,7 +36,7 @@ https://github.com/lindonky/YOLO-AI-AUTO-TAG
 ```text
 欢迎安装 YOLO Auto-Tag
 
-版本：V0.1
+版本：V0.5
 
 安装程序将检查桌面运行环境，并把 YOLO Auto-Tag 安装到当前 Windows 用户。
 

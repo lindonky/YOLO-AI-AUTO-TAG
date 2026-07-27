@@ -107,10 +107,42 @@ def main() -> None:
             finally:
                 connection.close()
 
+            # A desktop save dialog registers a short-lived, one-time target.
+            # The browser streams the generated ZIP to that token; only the
+            # selected path may be written and success is reported after the
+            # file has been flushed and atomically moved into place.
+            export_payload = b"PK\x03\x04desktop-task-export-smoke-test"
+            export_target = Path(temp_dir) / "chosen-task-package.zip"
+            export_token, registered_target = server.register_export_target(export_target)
+            assert registered_target == export_target
+            export_connection = HTTPConnection(
+                "127.0.0.1", server.server_address[1], timeout=10
+            )
+            try:
+                export_connection.request(
+                    "POST",
+                    f"/api/task-export/{export_token}",
+                    body=export_payload,
+                    headers={"Content-Type": "application/zip"},
+                )
+                export_response = export_connection.getresponse()
+                export_result = json.loads(export_response.read().decode("utf-8"))
+                assert export_response.status == 200 and export_result["ok"]
+                assert export_result["path"] == str(export_target)
+                assert export_target.read_bytes() == export_payload
+            finally:
+                export_connection.close()
+
             with urlopen(base + "/index.html", timeout=10) as response:
                 index_text = response.read().decode("utf-8")
             assert "desktop_config.js" in index_text
             assert "app_icon.png" in index_text
+            assert 'id="exportTaskQuickBtn"' in index_text
+            assert 'id="importTaskQuickInput"' in index_text
+            task_manager_text = (web_root / "task_manager.js").read_text(encoding="utf-8")
+            assert "choose_task_export_path" in task_manager_text
+            assert "/api/task-export/" in task_manager_text
+            assert "taskMenu.classList" not in task_manager_text
             assert (web_root / "app_icon.png").is_file()
             assert FAKE_KEY not in index_text
         finally:

@@ -4,7 +4,7 @@
     // 用户可见文案集中在这里，便于发布前逐句审核。
     const COPY = {
         appName: 'YOLO Auto-Tag',
-        version: 'V0.1',
+        version: 'V0.5',
         title: '首次使用配置',
         intro: '请输入你自己的中转站 URL、API Key 和模型名称。配置只保存在本机；API Key 使用 Windows DPAPI 加密，不会写入网页文件。',
         urlHelp: '可填写中转站首页或完整聊天接口；首页地址会自动补全 /v1/chat/completions。',

@@ -1,6 +1,6 @@
 # YOLO Auto-Tag
 
-当前版本：**V0.1**
+当前版本：**V0.5**
 
 一个面向 YOLO 目标检测数据集的 AI 辅助标注工具。它可以导入图片或视频，调用用户自行配置的视觉模型生成检测框，并导出 YOLO TXT、类别文件、可视化图片、裁剪图、透明抠图、视频抽帧和带框视频。
 
@@ -10,7 +10,7 @@
 
 > AI 标注不是人工复核的替代品。小目标、遮挡目标、画面边缘目标和密集目标仍可能发生漏检、误检或框选偏差。正式训练前请抽查图片与标签。
 
-## V0.1 的目标
+## V0.5 的目标
 
 - 保留原 Web 版的图片/视频标注、任务管理与多种导出能力。
 - 增加人工示例教学，让用户先画少量准确框，再由模型参考示例批量识别。
@@ -90,7 +90,14 @@
     - 本地打包 OpenCV.js，避免运行时依赖 OpenCV CDN。
     - 安装器检查 WebView2，缺少时调用微软 Bootstrapper。
 
-11. **构建安全检查**
+11. **任务包可靠保存与安全覆盖升级**
+    - “文件”菜单新增醒目的“任务存档”区域，设置菜单中的任务包入口继续保留。
+    - 桌面版导出任务包时先打开系统“另存为”窗口；只有 ZIP 真正写入并关闭后才提示成功和完整路径。
+    - 桌面保存使用短时一次性授权和临时 `.part` 文件，完成后原子替换，避免失败文件被误报为成功。
+    - 安装器检测已安装版本，复用原目录并保留本机 API 配置；应用运行时阻止覆盖安装，避免新旧进程冲突。
+    - 覆盖升级会清理早期测试版可能遗留的 `MyAutoTrain.exe`，同一时间只允许一个安装器运行。
+
+12. **构建安全检查**
     - 桌面构建使用无密钥 `config.desktop.js` 替换浏览器配置。
     - 构建前扫描源配置中的 Key，确保它没有进入桌面资源。
     - PyInstaller 结束后再次扫描整个 `dist`。
@@ -104,6 +111,8 @@
 2. 双击安装；测试构建未签名时，Windows 可能显示“未知发布者”。
 3. 安装器按当前 Windows 用户安装，不需要系统级 Python。
 4. 如果电脑缺少 WebView2，安装器会调用微软 WebView2 Bootstrapper；这一步可能需要联网。
+5. 如果检测到先前版本，安装器会显示安全覆盖升级说明；请先关闭正在运行的 YOLO Auto-Tag，再继续使用原目录覆盖安装。
+6. 覆盖升级会保留 `%LOCALAPPDATA%\YOLOAutoTag` 中的 API 配置和用户设置，不会生成第二套程序目录。
 
 ### 2. 首次配置
 
@@ -135,7 +144,7 @@
 5. 从目标外沿拖动画框，点击“保存示例”。
 6. 点击“开始分析”。
 7. 在结果列表逐张检查框和空结果状态。
-8. 确认后导出 YOLO 标注或任务包。
+8. 确认后从“文件 → 任务存档 → 导出任务包（可恢复）”导出；桌面版会先让你选择路径和文件名，并在写入完成后显示完整保存位置。
 
 ### 4. 视频标注
 
@@ -221,7 +230,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 
 ```text
 desktop\dist\YOLOAutoTag\YOLOAutoTag.exe
-desktop\output\YOLO_Auto_Tag_V0.1_Setup.exe
+desktop\output\YOLO_Auto_Tag_V0.5_Setup.exe
 ```
 
 如果使用 Conda Python，构建脚本会一并打包 `ffi.dll`、`liblzma.dll`、`libbz2.dll`、`libmpdec-4.dll` 和 `libexpat.dll`。使用官方 CPython 时不会要求这些 Conda 文件。
@@ -244,7 +253,7 @@ desktop\output\YOLO_Auto_Tag_V0.1_Setup.exe
 │  ├─ vendor/opencv/         # 本地 OpenCV.js
 │  └─ installer/             # Inno Setup 与安装文案
 ├─ app_icon.png              # 应用图标 PNG
-├─ COPY_REVIEW_V0.1.md       # V0.1 已确认文案记录
+├─ COPY_REVIEW_V0.5.md       # V0.5 已确认文案记录
 └─ NOTICE.md                 # 公开发布与第三方说明
 ```
 

@@ -5,13 +5,13 @@ VSVersionInfo(
       StringTable('080404B0', [
         StringStruct('CompanyName', '粥沫鱼块'),
         StringStruct('FileDescription', 'YOLO Auto-Tag'),
-        StringStruct('FileVersion', '0.1.0.0'),
+        StringStruct('FileVersion', '0.5.0.0'),
         StringStruct('InternalName', 'YOLOAutoTag'),
         StringStruct('LegalCopyright', '作者：粥沫鱼块'),
         StringStruct('Comments', '联系邮箱：2093880845@qq.com'),
         StringStruct('OriginalFilename', 'YOLOAutoTag.exe'),
         StringStruct('ProductName', 'YOLO Auto-Tag'),
-        StringStruct('ProductVersion', 'V0.1')
+        StringStruct('ProductVersion', 'V0.5')
       ])
     ]),
     VarFileInfo([VarStruct('Translation', [2052, 1200])])

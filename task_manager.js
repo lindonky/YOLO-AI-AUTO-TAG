@@ -15,50 +15,45 @@ const TaskManager = {
         const pauseBtn = document.getElementById('pauseBtn');
         const resumeBtn = document.getElementById('resumeBtn');
         const stopBtn = document.getElementById('stopBtn');
-        const taskMenuBtn = document.getElementById('taskMenuBtn');
-        const taskMenu = document.getElementById('taskMenu');
-        const exportTaskBtn = document.getElementById('exportTaskBtn');
-        const importInput = document.getElementById('importTaskInput');
+        const exportTaskButtons = ['exportTaskBtn', 'exportTaskQuickBtn']
+            .map(id => document.getElementById(id))
+            .filter(Boolean);
+        const importInputs = ['importTaskInput', 'importTaskQuickInput']
+            .map(id => document.getElementById(id))
+            .filter(Boolean);
         const backupIntervalInput = document.getElementById('autoBackupInterval');
         const backupEnabledInput = document.getElementById('autoBackupEnabled');
+
+        const closeTaskMenus = () => {
+            document.getElementById('fileMenu')?.classList.add('hidden');
+            document.getElementById('settingsMenu')?.classList.add('hidden');
+        };
 
         if (pauseBtn) pauseBtn.onclick = () => this.pause();
         if (resumeBtn) resumeBtn.onclick = () => this.resume();
         if (stopBtn) stopBtn.onclick = () => this.stop();
-        if (exportTaskBtn) exportTaskBtn.onclick = () => {
-            this.exportTask(false);
-            taskMenu.classList.add('hidden');
-        };
-        
-        if (taskMenuBtn && taskMenu) {
-            taskMenuBtn.onclick = (e) => {
-                e.stopPropagation();
-                // 自动切换对应的导出选项显示
-                const isVideo = els.modeToggle.checked;
-                const optImg = document.getElementById('exportOptionsImage');
-                const optVid = document.getElementById('exportOptionsVideo');
-                if(optImg) optImg.classList.toggle('hidden', isVideo);
-                if(optVid) optVid.classList.toggle('hidden', !isVideo);
-                
-                taskMenu.classList.toggle('hidden');
-            };
-            document.addEventListener('click', (e) => {
-                if (!taskMenuBtn.contains(e.target) && !taskMenu.contains(e.target)) {
-                    taskMenu.classList.add('hidden');
+        exportTaskButtons.forEach(button => {
+            button.onclick = async () => {
+                closeTaskMenus();
+                exportTaskButtons.forEach(item => { item.disabled = true; });
+                try {
+                    await this.exportTask(false);
+                } finally {
+                    exportTaskButtons.forEach(item => { item.disabled = false; });
                 }
-            });
-        }
+            };
+        });
 
-        if (importInput) {
-            importInput.onchange = (e) => {
+        importInputs.forEach(importInput => {
+            importInput.onchange = async (e) => {
                 if (e.target.files.length > 0) {
-                    this.importTask(e.target.files[0]);
+                    closeTaskMenus();
+                    await this.importTask(e.target.files[0]);
                 }
                 // 清空 input，允许重复导入同名文件
-                e.target.value = ''; 
-                taskMenu.classList.add('hidden');
+                e.target.value = '';
             };
-        }
+        });
 
         if (backupIntervalInput) {
             backupIntervalInput.onchange = (e) => {
@@ -152,6 +147,79 @@ const TaskManager = {
             this.backupIntervalId = null;
         }
     },
+
+    async chooseTaskExportDestination(fileName) {
+        const desktopApi = window.pywebview?.api;
+        if (desktopApi?.choose_task_export_path) {
+            const selected = await desktopApi.choose_task_export_path(fileName);
+            if (!selected?.ok) {
+                if (selected?.cancelled) return null;
+                throw new Error(selected?.message || '无法打开保存位置选择窗口');
+            }
+            return {
+                kind: 'desktop',
+                token: selected.token,
+                path: selected.path,
+                fileName
+            };
+        }
+
+        if (window.showSaveFilePicker) {
+            try {
+                const handle = await window.showSaveFilePicker({
+                    suggestedName: fileName,
+                    types: [{
+                        description: 'YOLO Auto-Tag 任务包',
+                        accept: { 'application/zip': ['.zip'] }
+                    }]
+                });
+                return { kind: 'file-picker', handle, fileName };
+            } catch (error) {
+                if (error?.name === 'AbortError') return null;
+                throw error;
+            }
+        }
+
+        return { kind: 'download', fileName };
+    },
+
+    async saveTaskBlob(blob, destination, isBackup = false) {
+        if (destination.kind === 'desktop') {
+            const response = await fetch(`/api/task-export/${encodeURIComponent(destination.token)}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/zip' },
+                body: blob
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || !result.ok) {
+                throw new Error(result.message || `保存任务包失败（HTTP ${response.status}）`);
+            }
+            return { confirmed: true, path: result.path || destination.path };
+        }
+
+        if (destination.kind === 'file-picker') {
+            const writable = await destination.handle.createWritable();
+            try {
+                await writable.write(blob);
+                await writable.close();
+            } catch (error) {
+                try { await writable.abort(); } catch {}
+                throw error;
+            }
+            return { confirmed: true, path: destination.handle.name || destination.fileName };
+        }
+
+        const objectUrl = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = objectUrl;
+        link.download = destination.fileName;
+        link.style.display = 'none';
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+        return { confirmed: false, path: destination.fileName, isBackup };
+    },
     
     async runWithConcurrencyOverride(items, worker, concurrency) {
         this.startTaskLifecycle();
@@ -214,13 +282,26 @@ const TaskManager = {
     async exportTask(isBackup = false) {
         if (!state.files || state.files.length === 0) {
             if (!isBackup) alert('没有可导出的任务数据');
-            return;
+            return false;
         }
 
         const statusMsg = els.statusMsg.textContent;
-        if (!isBackup) els.statusMsg.textContent = '正在打包任务数据...';
+        const fileName = isBackup
+            ? `autotag_backup_${Date.now()}.zip`
+            : `autotag_task_export_${Date.now()}.zip`;
+        let destination = { kind: 'download', fileName };
+        let completed = false;
 
         try {
+            if (!isBackup) {
+                els.statusMsg.textContent = '请选择任务包保存位置...';
+                destination = await this.chooseTaskExportDestination(fileName);
+                if (!destination) {
+                    els.statusMsg.textContent = '已取消导出任务包';
+                    return false;
+                }
+                els.statusMsg.textContent = '正在打包任务数据...';
+            }
             if (state.teachingDraftDirty && typeof saveTeachingExample === 'function') {
                 saveTeachingExample(false);
             }
@@ -271,26 +352,38 @@ const TaskManager = {
                 filesFolder.file(file.name, file);
             }
 
-            const content = await zip.generateAsync({ type: "blob" });
-            
-            if (isBackup) {
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(content);
-                a.download = `autotag_backup_${Date.now()}.zip`;
-                a.click();
-            } else {
-                const a = document.createElement('a');
-                a.href = URL.createObjectURL(content);
-                a.download = `autotag_task_export_${Date.now()}.zip`;
-                a.click();
-                els.statusMsg.textContent = '任务导出完成';
-            }
+            const content = await zip.generateAsync(
+                { type: "blob" },
+                metadata => {
+                    if (!isBackup) {
+                        els.statusMsg.textContent = `正在打包任务数据... ${Math.round(metadata.percent || 0)}%`;
+                    }
+                }
+            );
+            const saved = await this.saveTaskBlob(content, destination, isBackup);
 
+            if (isBackup) {
+                completed = true;
+            } else {
+                completed = true;
+                if (saved.confirmed) {
+                    els.statusMsg.textContent = `任务包已保存：${saved.path}`;
+                    alert(`任务包已保存到：\n${saved.path}`);
+                } else {
+                    els.statusMsg.textContent = `任务包已提交到浏览器下载：${saved.path}`;
+                    alert(`当前浏览器不支持选择完整保存路径。\n任务包已提交到浏览器下载，请在下载列表或默认“下载”文件夹中查找：\n${saved.path}`);
+                }
+            }
+            return true;
         } catch (e) {
             console.error('Export failed', e);
             els.statusMsg.textContent = '导出失败: ' + e.message;
+            if (!isBackup) alert('导出任务包失败：' + e.message);
+            return false;
         } finally {
-            if (!isBackup) setTimeout(() => els.statusMsg.textContent = statusMsg, 2000);
+            if (!isBackup && !completed && els.statusMsg.textContent.startsWith('正在')) {
+                els.statusMsg.textContent = statusMsg;
+            }
         }
     },
 

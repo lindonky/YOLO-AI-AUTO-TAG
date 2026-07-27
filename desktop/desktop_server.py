@@ -5,7 +5,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import secrets
 import sys
+import threading
+import time
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -21,6 +25,8 @@ from secure_settings import SettingsStore
 HOST = "127.0.0.1"
 MAX_API_BODY_BYTES = 128 * 1024 * 1024
 MAX_CONFIG_BODY_BYTES = 64 * 1024
+MAX_TASK_EXPORT_BYTES = 16 * 1024 * 1024 * 1024
+TASK_EXPORT_TOKEN_TTL_SECONDS = 10 * 60
 
 
 def build_outbound_opener(proxy_url: str):
@@ -81,6 +87,31 @@ class DesktopServer(ThreadingHTTPServer):
     def __init__(self, server_address, handler_class, settings_store: SettingsStore):
         super().__init__(server_address, handler_class)
         self.settings_store = settings_store
+        self._export_targets: dict[str, tuple[Path, float]] = {}
+        self._export_targets_lock = threading.Lock()
+
+    def register_export_target(self, target: Path) -> tuple[str, Path]:
+        path = Path(target).expanduser()
+        if path.suffix.lower() != ".zip":
+            path = path.with_suffix(".zip")
+        token = secrets.token_urlsafe(32)
+        now = time.monotonic()
+        with self._export_targets_lock:
+            self._export_targets = {
+                key: value
+                for key, value in self._export_targets.items()
+                if value[1] > now
+            }
+            self._export_targets[token] = (path, now + TASK_EXPORT_TOKEN_TTL_SECONDS)
+        return token, path
+
+    def consume_export_target(self, token: str) -> Path | None:
+        now = time.monotonic()
+        with self._export_targets_lock:
+            value = self._export_targets.pop(token, None)
+        if value is None or value[1] <= now:
+            return None
+        return value[0]
 
     def handle_error(self, request, client_address) -> None:
         _exc_type, exc, _traceback = sys.exc_info()
@@ -196,6 +227,9 @@ class DesktopHandler(SimpleHTTPRequestHandler):
         if route == "/api/proxy/custom":
             self.handle_api_proxy()
             return
+        if route.startswith("/api/task-export/"):
+            self.handle_task_export(route.removeprefix("/api/task-export/"))
+            return
         self.send_json(404, {"error": {"message": f"未知路径：{route}"}})
 
     def handle_save_config(self) -> None:
@@ -258,6 +292,54 @@ class DesktopHandler(SimpleHTTPRequestHandler):
             self.send_json(
                 502,
                 {"error": {"message": f"本地代理调用失败：{type(exc).__name__}: {exc}"}},
+            )
+
+    def handle_task_export(self, token: str) -> None:
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            self.send_json(400, {"ok": False, "message": "任务包大小信息无效"})
+            return
+        if content_length <= 0:
+            self.send_json(400, {"ok": False, "message": "任务包内容为空"})
+            return
+        if content_length > MAX_TASK_EXPORT_BYTES:
+            self.send_json(413, {"ok": False, "message": "任务包超过 16 GB 限制"})
+            return
+
+        target = self.server.consume_export_target(token)
+        if target is None:
+            self.send_json(404, {"ok": False, "message": "保存授权已失效，请重新选择保存位置"})
+            return
+
+        temporary = target.with_name(f".{target.name}.{secrets.token_hex(6)}.part")
+        try:
+            if not target.parent.is_dir():
+                raise FileNotFoundError(f"保存目录不存在：{target.parent}")
+            remaining = content_length
+            with temporary.open("wb") as output:
+                while remaining:
+                    chunk = self.rfile.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise OSError("任务包传输意外中断")
+                    output.write(chunk)
+                    remaining -= len(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temporary, target)
+            self.send_json(
+                200,
+                {"ok": True, "path": str(target), "bytes": content_length},
+            )
+        except Exception as exc:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            logging.getLogger("desktop.export").exception("Task package export failed")
+            self.send_json(
+                500,
+                {"ok": False, "message": f"写入任务包失败：{type(exc).__name__}: {exc}"},
             )
 
 

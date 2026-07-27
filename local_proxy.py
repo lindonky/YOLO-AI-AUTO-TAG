@@ -102,7 +102,7 @@ class ProxyHandler(SimpleHTTPRequestHandler):
                 "Authorization": authorization,
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "User-Agent": "YOLOAutoTagLocalProxy/0.1",
+                "User-Agent": "YOLOAutoTagLocalProxy/0.5",
             },
         )
 

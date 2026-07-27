@@ -36,8 +36,8 @@ def patch_desktop_index() -> None:
     content = index_path.read_text(encoding="utf-8")
     config_pattern = re.compile(r'<script\s+src="config\.js[^"\n]*"></script>')
     replacement = (
-        '<script src="config.js?v=desktop-0.1"></script>\n'
-        '<script src="desktop_config.js?v=desktop-0.1"></script>'
+        '<script src="config.js?v=desktop-0.5"></script>\n'
+        '<script src="desktop_config.js?v=desktop-0.5"></script>'
     )
     content, count = config_pattern.subn(replacement, content, count=1)
     if count != 1:

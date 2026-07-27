@@ -1,5 +1,5 @@
 YOLO Auto-Tag 使用说明
-版本：V0.1
+版本：V0.5
 
 一、首次启动
 1. 双击桌面上的“YOLO Auto-Tag”。

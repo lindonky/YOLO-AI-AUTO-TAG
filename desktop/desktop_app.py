@@ -22,6 +22,43 @@ ERROR_ALREADY_EXISTS = 183
 WEBVIEW2_CLIENT_ID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
 
+class DesktopApi:
+    def __init__(self, server) -> None:
+        self.server = server
+
+    def choose_task_export_path(self, suggested_name: str) -> dict:
+        safe_name = Path(str(suggested_name or "autotag_task_export.zip")).name
+        if not safe_name.lower().endswith(".zip"):
+            safe_name += ".zip"
+        downloads = Path(os.environ.get("USERPROFILE") or Path.home()) / "Downloads"
+        initial_directory = downloads if downloads.is_dir() else Path.home()
+        try:
+            window = webview.windows[0]
+            selected = window.create_file_dialog(
+                webview.FileDialog.SAVE,
+                directory=str(initial_directory),
+                save_filename=safe_name,
+                file_types=("ZIP 文件 (*.zip)",),
+            )
+            if not selected:
+                return {"ok": False, "cancelled": True}
+            raw_path = selected[0] if not isinstance(selected, str) else selected
+            token, target = self.server.register_export_target(Path(raw_path))
+            return {
+                "ok": True,
+                "cancelled": False,
+                "token": token,
+                "path": str(target),
+            }
+        except Exception as exc:
+            logging.exception("Failed to choose task export path")
+            return {
+                "ok": False,
+                "cancelled": False,
+                "message": f"打开保存窗口失败：{type(exc).__name__}: {exc}",
+            }
+
+
 def resource_root() -> Path:
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return Path(sys._MEIPASS)
@@ -116,6 +153,7 @@ def main() -> int:
         webview.create_window(
             WINDOW_TITLE,
             url=url,
+            js_api=DesktopApi(server),
             width=1440,
             height=920,
             min_size=(1080, 700),
