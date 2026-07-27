@@ -1,0 +1,30 @@
+# User secrets
+.env
+.env.*
+config.local.js
+*.key
+*.pem
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Desktop build outputs
+desktop/build/
+desktop/build_assets/
+desktop/dist/
+desktop/output/
+
+# User data and generated labels
+Result/
+*.zip
+*.log
+settings.json
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,14 @@
+YOLO Auto-Tag 安装说明
+
+版本：V0.1
+作者：粥沫鱼块
+邮箱：2093880845@qq.com
+项目仓库：https://github.com/lindonky/YOLO-AI-AUTO-TAG
+
+YOLO Auto-Tag 使用支持图片理解的 AI 模型，为图片或视频抽帧生成 YOLO 目标检测标注。AI 结果可能存在漏检、误检或框选偏差，正式训练前请人工复核。
+
+安装程序会把应用安装到当前 Windows 用户目录，并检查 Microsoft Edge WebView2 Runtime；电脑缺少 WebView2 时，会调用随安装包提供的微软安装程序。
+
+软件不会预置中转站 URL 或 API Key。首次启动后，请填写自己的 URL、Key 和模型名称。只填写中转站首页时，软件会自动补全常用的 /v1/chat/completions 路径。
+
+API Key 使用 Windows DPAPI 加密并保存在当前用户目录，不会写入网页文件。继续安装表示你已了解：数据权限、API 费用、AI 结果复核和最终数据集质量由使用者负责。

@@ -1,0 +1,25 @@
+2026-01-25 更新日志 (V1.2.3-V1.2.5)
+
+
+[优化与修复]
+修复了视频帧异常bug：修复了视频帧导出再导入抽帧数异常的bug。
+
+使用命令安装Python库依赖
+跳转到py_run文件夹：
+cd py_run
+安装依赖：
+pip install -r requirements.txt
+或者：
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+
+
+2026-01-27 更新日志 (V1.2.6)
+[优化与修复]
+提前编译了静态 CSS，优化加载速度。
+
+二次开发可以从链接
+https://github.com/tailwindlabs/tailwindcss/releases/latest   
+Windows用户请下载tailwindcss-windows-x64.exe  
+重命名为tailwindcss.exe  放在Web文件夹下运行dev_styles.bat
+保持该窗口开启，当你修改并保存文件时，它会自动重新生成 style.css。
