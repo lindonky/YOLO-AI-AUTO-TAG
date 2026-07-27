@@ -71,9 +71,6 @@ Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"
 Filename: "{app}\{#MyAppExeName}"; Description: "运行 {#MyAppName}"; Flags: nowait postinstall skipifsilent
 
 [Code]
-var
-  AuthorLabel: TNewStaticText;
-
 function IsWebView2Installed: Boolean;
 var
   Version: String;
@@ -82,18 +79,6 @@ begin
     RegQueryStringValue(HKLM32, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', Version) or
     RegQueryStringValue(HKLM64, 'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', Version) or
     RegQueryStringValue(HKCU, 'Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}', 'pv', Version);
-end;
-
-procedure InitializeWizard;
-begin
-  AuthorLabel := TNewStaticText.Create(WizardForm);
-  AuthorLabel.Parent := WizardForm;
-  AuthorLabel.Caption := '作者：{#MyAppPublisher}  |  邮箱：{#MyAppContact}';
-  AuthorLabel.Font.Color := clGray;
-  AuthorLabel.Font.Size := 8;
-  AuthorLabel.Left := ScaleX(12);
-  AuthorLabel.Top := WizardForm.ClientHeight - ScaleY(23);
-  AuthorLabel.AutoSize := True;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;

@@ -198,9 +198,7 @@
                 document.getElementById('desktopApiKey').value = '';
                 if (runTest) {
                     const testResponse = await fetch('/api/app-config/test', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: '{}'
+                        method: 'POST'
                     });
                     const testData = await testResponse.json();
                     if (!testResponse.ok || !testData.ok) throw new Error(testData.message || `HTTP ${testResponse.status}`);

@@ -45,10 +45,10 @@ https://github.com/lindonky/YOLO-AI-AUTO-TAG
 项目仓库：lindonky/YOLO-AI-AUTO-TAG
 ```
 
-安装器底部小字：
+安装器左下角：
 
 ```text
-作者：粥沫鱼块  |  邮箱：2093880845@qq.com
+保持空白，不显示作者、邮箱或其他自定义文字。
 ```
 
 ## 首次配置

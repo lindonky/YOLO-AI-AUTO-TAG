@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import tempfile
 import threading
+from http.client import HTTPConnection
 from pathlib import Path
 from urllib.request import Request, urlopen
 
@@ -74,6 +75,37 @@ def main() -> None:
             assert status == 200 and public["configured"] and public["key_configured"]
             assert FAKE_KEY not in json.dumps(public)
             assert store.runtime()["api_key"] == FAKE_KEY
+
+            # Regression: old desktop frontends sent a literal "{}" body to
+            # the test endpoint. The server must drain it before reusing the
+            # HTTP/1.1 connection, otherwise the next method becomes
+            # "{}GET"/"{}POST" and returns an HTML 501 page.
+            store.update(
+                {
+                    "api_url": base + "/v1/chat/completions",
+                    "api_key": "",
+                    "model": "gemini-3.6-flash",
+                    "proxy_url": "",
+                }
+            )
+            connection = HTTPConnection("127.0.0.1", server.server_address[1], timeout=10)
+            try:
+                connection.request(
+                    "POST",
+                    "/api/app-config/test",
+                    body=b"{}",
+                    headers={"Content-Type": "application/json"},
+                )
+                test_response = connection.getresponse()
+                test_body = json.loads(test_response.read().decode("utf-8"))
+                assert test_response.status == 502 and not test_body["ok"]
+
+                connection.request("GET", "/api/health")
+                reused_response = connection.getresponse()
+                reused_body = json.loads(reused_response.read().decode("utf-8"))
+                assert reused_response.status == 200 and reused_body["ok"]
+            finally:
+                connection.close()
 
             with urlopen(base + "/index.html", timeout=10) as response:
                 index_text = response.read().decode("utf-8")

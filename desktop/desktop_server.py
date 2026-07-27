@@ -138,6 +138,19 @@ class DesktopHandler(SimpleHTTPRequestHandler):
             raise ValueError("JSON 顶层必须是对象")
         return data
 
+    def discard_optional_body(self, maximum: int = MAX_CONFIG_BODY_BYTES) -> None:
+        """Drain an optional request body so HTTP/1.1 keep-alive stays synchronized."""
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise ValueError("Content-Length 无效") from exc
+        if content_length < 0:
+            raise ValueError("Content-Length 无效")
+        if content_length > maximum:
+            raise ValueError("请求体超过允许大小")
+        if content_length:
+            self.rfile.read(content_length)
+
     def do_GET(self) -> None:
         route = urlsplit(self.path).path
         if route == "/api/health":
@@ -195,6 +208,11 @@ class DesktopHandler(SimpleHTTPRequestHandler):
             self.send_json(500, {"ok": False, "message": f"保存配置失败：{type(exc).__name__}"})
 
     def handle_test_config(self) -> None:
+        try:
+            self.discard_optional_body()
+        except ValueError as exc:
+            self.send_json(400, {"ok": False, "message": str(exc)})
+            return
         runtime = self.settings_store.runtime()
         if not runtime["api_url"] or not runtime["api_key"] or not runtime["model"]:
             self.send_json(400, {"ok": False, "message": "请先完整保存 URL、Key 和模型名称"})
