@@ -78,6 +78,17 @@ def upstream_error_message(status: int, body: bytes) -> str:
             "中转站拒绝了当前接口路径（HTTP 405）。如果你填写的是中转站首页，"
             "请改用完整聊天接口；通常以 /v1/chat/completions 结尾。"
         )
+    if status == 403 and "all available accounts exhausted" in detail.lower():
+        return (
+            "中转站当前没有可用的上游账号或额度（HTTP 403）。"
+            "这不是本地 Key 保存错误；请稍后重试、联系中转站，"
+            "或切换到中转站当前有资源的模型。"
+        )
+    if status in {401, 403}:
+        return (
+            f"中转站拒绝了鉴权或当前模型请求（HTTP {status}）：{detail[:300]}。"
+            "请检查 Key、账户额度和模型权限。"
+        )
     return f"上游返回 HTTP {status}：{detail[:300]}"
 
 

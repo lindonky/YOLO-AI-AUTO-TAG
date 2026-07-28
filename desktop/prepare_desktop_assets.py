@@ -24,7 +24,15 @@ def reset_staging() -> None:
 
 
 def copy_frontend() -> None:
-    for name in ("index.html", "main.js", "task_manager.js", "style.css", "app_icon.png"):
+    for name in (
+        "index.html",
+        "main.js",
+        "task_manager.js",
+        "review_workspace.js",
+        "style.css",
+        "review_workspace.css",
+        "app_icon.png",
+    ):
         shutil.copy2(PROJECT_ROOT / name, WEB_ROOT / name)
     shutil.copytree(PROJECT_ROOT / "libs", WEB_ROOT / "libs")
     shutil.copy2(DESKTOP_ROOT / "assets" / "config.desktop.js", WEB_ROOT / "config.js")
@@ -36,8 +44,8 @@ def patch_desktop_index() -> None:
     content = index_path.read_text(encoding="utf-8")
     config_pattern = re.compile(r'<script\s+src="config\.js[^"\n]*"></script>')
     replacement = (
-        '<script src="config.js?v=desktop-0.5"></script>\n'
-        '<script src="desktop_config.js?v=desktop-0.5"></script>'
+        '<script src="config.js?v=desktop-0.9"></script>\n'
+        '<script src="desktop_config.js?v=desktop-0.9-batch-failure1"></script>'
     )
     content, count = config_pattern.subn(replacement, content, count=1)
     if count != 1:

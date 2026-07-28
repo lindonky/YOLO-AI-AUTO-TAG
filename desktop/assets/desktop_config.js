@@ -4,7 +4,7 @@
     // 用户可见文案集中在这里，便于发布前逐句审核。
     const COPY = {
         appName: 'YOLO Auto-Tag',
-        version: 'V0.5',
+        version: 'V0.9',
         title: '首次使用配置',
         intro: '请输入你自己的中转站 URL、API Key 和模型名称。配置只保存在本机；API Key 使用 Windows DPAPI 加密，不会写入网页文件。',
         urlHelp: '可填写中转站首页或完整聊天接口；首页地址会自动补全 /v1/chat/completions。',
@@ -197,11 +197,7 @@
                 document.getElementById('desktopApiUrl').value = data.api_url || payload.api_url;
                 document.getElementById('desktopApiKey').value = '';
                 if (runTest) {
-                    const testResponse = await fetch('/api/app-config/test', {
-                        method: 'POST'
-                    });
-                    const testData = await testResponse.json();
-                    if (!testResponse.ok || !testData.ok) throw new Error(testData.message || `HTTP ${testResponse.status}`);
+                    const testData = await this.testConnection();
                     this.setStatus(testData.message || '连接测试成功');
                 } else {
                     this.setStatus('配置已安全保存');
@@ -211,6 +207,15 @@
             } finally {
                 this.setButtonsDisabled(false);
             }
+        },
+
+        async testConnection() {
+            const response = await fetch('/api/app-config/test', { method: 'POST' });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || !data.ok) {
+                throw new Error(data.message || `连接测试失败（HTTP ${response.status}）`);
+            }
+            return data;
         },
 
         applyModel(model) {

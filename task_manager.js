@@ -224,6 +224,14 @@ const TaskManager = {
     async runWithConcurrencyOverride(items, worker, concurrency) {
         this.startTaskLifecycle();
         const processedNames = new Set();
+        const summary = {
+            attempted: 0,
+            succeeded: 0,
+            failed: 0,
+            skipped: 0,
+            errors: [],
+            stopped: false
+        };
         
         // 只有非视频模式才跳过已处理的；视频模式可能需要继续
         if (!state.isVideoMode) {
@@ -261,22 +269,32 @@ const TaskManager = {
 
                 // 图片模式跳过逻辑
                 if (!state.isVideoMode && processedNames.has(item.name)) {
+                    summary.skipped++;
                     continue;
                 }
                 
+                summary.attempted++;
                 try {
                     await worker(item);
+                    summary.succeeded++;
                 } catch (err) {
                     console.error("Worker error:", err);
+                    summary.failed++;
+                    summary.errors.push({
+                        fileName: item?.name || `第 ${currentIndex + 1} 项`,
+                        message: String(err?.message || err || '未知错误')
+                    });
                 }
             }
         });
 
         await Promise.all(runners);
+        summary.stopped = this.isStopped;
         this.endTaskLifecycle();
-        if (this.isStopped) {
+        if (summary.stopped) {
             els.statusMsg.textContent = '任务已手动结束';
         }
+        return summary;
     },
 
     async exportTask(isBackup = false) {

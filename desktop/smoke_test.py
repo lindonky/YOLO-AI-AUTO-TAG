@@ -10,7 +10,7 @@ from http.client import HTTPConnection
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from desktop_server import create_server
+from desktop_server import create_server, upstream_error_message
 from secure_settings import SettingsStore
 
 
@@ -33,6 +33,12 @@ def main() -> None:
     root = Path(__file__).resolve().parent
     web_root = root / "build_assets" / "web"
     assert (web_root / "index.html").is_file(), "run prepare_desktop_assets.py first"
+    exhausted = upstream_error_message(
+        403,
+        b'{"error":{"message":"All available accounts exhausted"}}',
+    )
+    assert "没有可用的上游账号或额度" in exhausted
+    assert "Key 保存错误" in exhausted
 
     with tempfile.TemporaryDirectory(prefix="yolo-autotag-desktop-test-") as temp_dir:
         store = SettingsStore(Path(temp_dir) / "settings.json")
@@ -139,11 +145,20 @@ def main() -> None:
             assert "app_icon.png" in index_text
             assert 'id="exportTaskQuickBtn"' in index_text
             assert 'id="importTaskQuickInput"' in index_text
+            assert 'id="reviewResultsBtn"' in index_text
+            assert 'review_workspace.js' in index_text
+            assert 'review_workspace.css' in index_text
             task_manager_text = (web_root / "task_manager.js").read_text(encoding="utf-8")
             assert "choose_task_export_path" in task_manager_text
             assert "/api/task-export/" in task_manager_text
+            assert "summary.failed++" in task_manager_text
             assert "taskMenu.classList" not in task_manager_text
+            main_text = (web_root / "main.js").read_text(encoding="utf-8")
+            assert "AppConfigManager.testConnection" in main_text
+            assert "图片处理未完成" in main_text
             assert (web_root / "app_icon.png").is_file()
+            assert (web_root / "review_workspace.js").is_file()
+            assert (web_root / "review_workspace.css").is_file()
             assert FAKE_KEY not in index_text
         finally:
             server.shutdown()

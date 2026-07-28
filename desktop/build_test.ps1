@@ -62,4 +62,4 @@ if (-not $Iscc) {
 
 & $Iscc (Join-Path $Root 'installer\YOLOAutoTag.iss')
 if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installer build failed.' }
-Write-Host ("Installer generated: " + (Join-Path $Root 'output\YOLO_Auto_Tag_V0.5_Setup.exe'))
+Write-Host ("Installer generated: " + (Join-Path $Root 'output\YOLO_Auto_Tag_V0.9_Setup.exe'))

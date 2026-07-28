@@ -6,6 +6,7 @@
     <title>YOLO Auto-Tag</title>
     <link rel="icon" type="image/png" href="app_icon.png">
     <link rel="stylesheet" href="style.css?v=20260726-teaching-ui2">
+    <link rel="stylesheet" href="review_workspace.css?v=20260728-folder-review2">
 
 </head>
 <body class="bg-gray-50 dark:bg-gray-900 h-screen flex flex-col overflow-hidden transition-colors duration-200">
@@ -66,6 +67,7 @@
         </label>
         <div class="border-t dark:border-gray-700 my-1"></div>
         <div class="px-2 py-1 text-[10px] uppercase font-bold text-gray-400 tracking-wider">直接导出结果</div>
+        <button id="reviewResultsBtn" class="block w-full text-left px-3 py-2 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-gray-700 rounded transition">打开标注结果复核台</button>
         <button id="exportAllTransparentBtn" class="block w-full text-left px-3 py-2 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 rounded">导出所有透明图</button>
         <button id="exportAllCropBtn" class="block w-full text-left px-3 py-2 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 rounded">导出所有截取图</button>
         <button id="exportBatchImageLabelsBtn" class="block w-full text-left px-3 py-2 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 rounded">导出图片标注 (YOLO)</button>
@@ -361,7 +363,8 @@
         };
       }
     </script>
-    <script src="main.js?v=20260726-4k-empty-validation4"></script>
-    <script src="task_manager.js?v=20260726-4k-empty-validation4"></script>
+    <script src="main.js?v=20260728-batch-failure1"></script>
+    <script src="task_manager.js?v=20260728-batch-failure1"></script>
+    <script src="review_workspace.js?v=20260728-folder-review2"></script>
 </body>
 </html>

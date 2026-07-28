@@ -752,6 +752,21 @@ async function startAnalysis() {
         // 第二步：分析 (继续向下执行 processVideosBatch)
     }
 
+    // 桌面版在开始批量任务前只做一次轻量连接检查。这样中转站账号耗尽、
+    // Key 失效或模型不可用时，不会把同一个错误重复发送给每一张图片。
+    if (window.AppConfigManager?.testConnection) {
+        els.statusMsg.textContent = '正在检查 API、模型和中转站可用性…';
+        try {
+            await window.AppConfigManager.testConnection();
+        } catch (error) {
+            const message = String(error?.message || error || '连接测试失败');
+            els.statusMsg.textContent = `无法开始分析：${message}`;
+            alert(`无法开始分析\n\n${message}\n\n请在“API 设置”中测试配置，或稍后重试。`);
+            window.AppConfigManager.open?.();
+            return;
+        }
+    }
+
     const config = CONFIGS[els.modelSelect.value];
     setLoading(true);
     els.progress.box.classList.remove('hidden');
@@ -760,7 +775,17 @@ async function startAnalysis() {
         if (state.isVideoMode) {
             await processVideosBatch(config);
         } else {
-            await processImagesBatch(config);
+            const batchSummary = await processImagesBatch(config);
+            if (batchSummary?.failed > 0) {
+                const firstError = batchSummary.errors?.[0]?.message || '未知错误';
+                alert(
+                    `本次识别成功 ${batchSummary.succeeded} 张，失败 ${batchSummary.failed} 张。\n\n` +
+                    `首个错误：${firstError}\n\n失败图片未写入空标注，可修复配置后再次开始分析。`
+                );
+            }
+            if (batchSummary?.availableResults > 0 && window.ReviewWorkspace?.open) {
+                window.ReviewWorkspace.open({ reason: 'analysis-complete' });
+            }
         }
     } catch (err) {
         els.statusMsg.textContent = `错误: ${err.message}`;
@@ -2219,20 +2244,54 @@ async function processImagesBatch(config) {
     if (!isSingleFile) updateProgress(0, `准备处理 ${total} 张图片...`);
     
     // 如果只有一张图，不需要 concurrency 逻辑，直接跑
+    let batchSummary;
     if (isSingleFile) {
-        await worker(files[0]);
+        try {
+            await worker(files[0]);
+            batchSummary = { attempted: 1, succeeded: 1, failed: 0, skipped: 0, errors: [] };
+        } catch (error) {
+            batchSummary = {
+                attempted: 1,
+                succeeded: 0,
+                failed: 1,
+                skipped: 0,
+                errors: [{ fileName: files[0]?.name || '当前图片', message: String(error?.message || error) }]
+            };
+        }
     } else {
-        await runWithConcurrency(files, worker, concurrency);
+        batchSummary = await runWithConcurrency(files, worker, concurrency);
     }
+
+    // 兼容未加载 task_manager.js 的普通网页运行路径。
+    batchSummary = batchSummary || {
+        attempted: total,
+        succeeded: total,
+        failed: 0,
+        skipped: 0,
+        errors: []
+    };
     
     const reviewCount = state.imageResults.filter(item => item.needsReview).length;
     const verifiedEmptyCount = state.imageResults.filter(item => item.verifiedEmpty).length;
     const recoveredCount = state.imageResults.filter(item =>
         String(item.validation?.status || '').startsWith('recovered')
     ).length;
-    els.statusMsg.textContent =
-        `图片处理完成：${state.imageResults.length} 项 · 找回漏检 ${recoveredCount} · ` +
-        `确认无目标 ${verifiedEmptyCount} · 待人工复核 ${reviewCount}`;
+    const selectedNames = new Set(files.map(file => file.name));
+    const availableResults = state.imageResults.filter(item => selectedNames.has(item.fileName)).length;
+    batchSummary.availableResults = availableResults;
+
+    if (batchSummary.failed > 0) {
+        const firstError = batchSummary.errors?.[0]?.message || '未知错误';
+        els.statusMsg.textContent =
+            `图片处理未完成：成功 ${batchSummary.succeeded} 张 · 失败 ${batchSummary.failed} 张 · ` +
+            `已有结果 ${availableResults} 张 · 原因：${firstError}`;
+    } else {
+        els.statusMsg.textContent =
+            `图片处理完成：${availableResults} 项 · 找回漏检 ${recoveredCount} · ` +
+            `确认无目标 ${verifiedEmptyCount} · 待人工复核 ${reviewCount}`;
+    }
+
+    return batchSummary;
 }
 
 async function processVideosBatch(config) {
