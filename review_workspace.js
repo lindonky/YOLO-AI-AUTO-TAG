@@ -10,19 +10,20 @@
             label: '背景图', folder: 'background', symbol: '○',
             description: '确认整张图片没有目标', rule: 'TXT 保留为空文件（0 KB）'
         },
-        review: {
-            label: '人工复核图', folder: 'manual_review', symbol: '!',
-            description: 'AI 不确定，由人工最终决定', rule: '可修改框，也可保留在复核目录'
+        error: {
+            label: '异常图', folder: 'error', symbol: '!',
+            description: '识别失败、结果缺失或仍需人工处理', rule: '始终允许随任务包导出，不丢弃原图'
         }
     };
     const CATEGORY_KEYS = Object.keys(CATEGORY_META);
     const FLIP_DURATION = 470;
     const objectUrls = new WeakMap();
-    const deckIndices = { normal: 0, background: 0, review: 0 };
+    const deckIndices = { normal: 0, background: 0, error: 0 };
+    const folderScrollTops = { normal: 0, background: 0, error: 0 };
     const wheelStates = {
         normal: { armed: true, timer: null },
         background: { armed: true, timer: null },
-        review: { armed: true, timer: null }
+        error: { armed: true, timer: null }
     };
     const animatingDecks = new Set();
 
@@ -55,7 +56,8 @@
     }
 
     function currentResults() {
-        return Array.isArray(state?.imageResults) ? state.imageResults : [];
+        if (!Array.isArray(state?.imageResults)) state.imageResults = [];
+        return state.imageResults;
     }
 
     function getResultId(result) {
@@ -67,19 +69,73 @@
     }
 
     function defaultCategory(result) {
-        if (result?.reviewCategory && CATEGORY_META[result.reviewCategory]) return result.reviewCategory;
+        if (result?.reviewCategory === 'review') return 'error';
         const boxes = Array.isArray(result?.annotations) ? result.annotations : [];
-        if (result?.needsReview) return 'review';
+        const validationStatus = String(result?.validation?.status || '');
+        if (result?.processingError || validationStatus === 'processing_error') return 'error';
+        if (result?.needsReview && !result?.manualReviewed) return 'error';
+        if (result?.reviewCategory && CATEGORY_META[result.reviewCategory]) return result.reviewCategory;
+        if (result?.needsReview) return 'error';
         if (boxes.length > 0) return 'normal';
         if (result?.verifiedEmpty === true) return 'background';
-        return 'review';
+        return 'error';
     }
 
     function prepareResults() {
-        currentResults().forEach(result => {
+        const results = currentResults();
+        const claimed = new Set();
+        const files = Array.isArray(state?.files) ? state.files : [];
+
+        files.forEach(file => {
+            let result = results.find(item => !claimed.has(item) && item.file === file);
+            if (!result) {
+                result = results.find(item =>
+                    !claimed.has(item) &&
+                    String(item.fileName || item.file?.name || '') === String(file?.name || '')
+                );
+            }
+            if (result) {
+                claimed.add(result);
+                if (!result.file) result.file = file;
+                if (!result.fileName) result.fileName = file.name;
+                return;
+            }
+            results.push({
+                fileName: file?.name || '未命名图片',
+                file,
+                annotations: [],
+                reviewCategory: 'error',
+                processingError: '该图片没有生成识别结果，已自动保留到 error',
+                verifiedEmpty: false,
+                needsReview: true,
+                validation: {
+                    status: 'processing_error',
+                    verifiedEmpty: false,
+                    needsReview: true,
+                    confidence: 0,
+                    estimatedCount: 0,
+                    reason: '识别结果缺失，原图已保留到 error'
+                }
+            });
+        });
+
+        results.forEach(result => {
             getResultId(result);
             result.annotations = Array.isArray(result.annotations) ? result.annotations : [];
             result.reviewCategory = defaultCategory(result);
+            const issue = issueFor(result);
+            if (issue && result.reviewCategory !== 'error') {
+                result.reviewCategory = 'error';
+                result.verifiedEmpty = false;
+                result.needsReview = true;
+                result.validation = {
+                    ...(result.validation || {}),
+                    status: 'review_error',
+                    verifiedEmpty: false,
+                    needsReview: true,
+                    reason: `${issue}；已自动保留到 error`
+                };
+            }
         });
     }
 
@@ -192,7 +248,7 @@
                     </div>
                 </header>
                 <section class="rw-summary" aria-label="复核统计">
-                    <div class="rw-summary-copy"><small>任务概览</small><strong data-rw-total>共 0 张图片</strong><span>人工复核图会单独保存，不混入正常图。</span></div>
+                    <div class="rw-summary-copy"><small>任务概览</small><strong data-rw-total>共 0 张图片</strong><span>每张导入图片都必须进入 normal、background 或 error。</span></div>
                     <div class="rw-summary-cards">
                         ${CATEGORY_KEYS.map(category => `<div class="rw-summary-card" data-category="${category}"><span class="rw-summary-icon">${CATEGORY_META[category].symbol}</span><span><b data-rw-summary-count="${category}">0</b><small>${CATEGORY_META[category].label}</small></span></div>`).join('')}
                         <div class="rw-summary-card rw-conflicts"><span class="rw-summary-icon">◆</span><span><b data-rw-conflict-count>0</b><small>规则冲突</small></span></div>
@@ -203,7 +259,7 @@
                         <button class="rw-segment rw-active" data-rw-filter="all" type="button">全部</button>
                         <button class="rw-segment" data-rw-filter="normal" type="button">正常图</button>
                         <button class="rw-segment" data-rw-filter="background" type="button">背景图</button>
-                        <button class="rw-segment" data-rw-filter="review" type="button">人工复核</button>
+                        <button class="rw-segment" data-rw-filter="error" type="button">异常图</button>
                     </div>
                     <label class="rw-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg><input data-rw-search type="search" placeholder="搜索文件名…" autocomplete="off"></label>
                     <div class="rw-wheel-hint"><span class="rw-wheel-icon">↕</span><span data-rw-view-hint>鼠标停在卡片上滚动，一次翻一张并交替覆盖置顶</span></div>
@@ -212,7 +268,7 @@
                     ${CATEGORY_KEYS.map(category => createLaneMarkup(category)).join('')}
                 </section>
                 <footer class="rw-footer">
-                    <div class="rw-folder-preview"><span class="rw-folder-icon">⌑</span><div><b>分类任务包结构</b><span>normal/ · background/ · manual_review/ · classes.txt · review_manifest.json</span></div></div>
+                    <div class="rw-folder-preview"><span class="rw-folder-icon">⌑</span><div><b>分类任务包结构</b><span>三类均包含 images/ 与同名 labels/*.txt</span></div></div>
                     <div class="rw-footer-status"><i></i><span>所有图片符合当前分类规则</span></div>
                     <button class="rw-button rw-button-subtle" data-rw-action="return-main" type="button">稍后处理</button>
                     <button class="rw-button rw-button-primary rw-button-wide" data-rw-action="export" type="button"><span>确认分类并生成任务包</span></button>
@@ -298,7 +354,6 @@
     function setFilter(filter) {
         activeFilter = CATEGORY_META[filter] ? filter : 'all';
         root.querySelectorAll('[data-rw-filter]').forEach(button => button.classList.toggle('rw-active', button.dataset.rwFilter === activeFilter));
-        CATEGORY_KEYS.forEach(category => deckIndices[category] = 0);
         render();
     }
 
@@ -327,9 +382,9 @@
         const footerStatus = root.querySelector('.rw-footer-status');
         footerStatus.classList.toggle('rw-error', conflicts.length > 0);
         footerStatus.querySelector('span').textContent = conflicts.length
-            ? `${conflicts.length} 张图片存在分类或标注规则冲突`
+            ? `${conflicts.length} 张图片存在规则问题，导出时会自动放入 error`
             : '所有图片符合当前分类规则';
-        root.querySelectorAll('[data-rw-action="export"]').forEach(button => button.disabled = conflicts.length > 0);
+        root.querySelectorAll('[data-rw-action="export"]').forEach(button => button.disabled = results.length === 0);
     }
 
     function renderLane(category) {
@@ -338,6 +393,9 @@
         deckIndices[category] = clamp(deckIndices[category], 0, Math.max(0, results.length - 1));
         const activeIndex = deckIndices[category];
         const viewport = root.querySelector(`[data-rw-deck="${category}"]`);
+        if (viewport.classList.contains('rw-folder-grid')) {
+            folderScrollTops[category] = viewport.scrollTop;
+        }
         viewport.classList.toggle('rw-folder-grid', folderView);
         viewport.replaceChildren();
         if (!results.length) {
@@ -360,6 +418,16 @@
             });
         }
         bindDeckViewport(viewport, category, !folderView);
+        if (folderView) {
+            const wantedScrollTop = folderScrollTops[category] || 0;
+            viewport.scrollTop = wantedScrollTop;
+            requestAnimationFrame(() => {
+                viewport.scrollTop = Math.min(
+                    wantedScrollTop,
+                    Math.max(0, viewport.scrollHeight - viewport.clientHeight)
+                );
+            });
+        }
         root.querySelector(`[data-rw-page="${category}"]`).textContent = results.length ? `${activeIndex + 1} / ${results.length}` : '0 / 0';
         root.querySelector(`[data-rw-prev="${category}"]`).disabled = activeIndex <= 0;
         root.querySelector(`[data-rw-next="${category}"]`).disabled = activeIndex >= results.length - 1;
@@ -425,7 +493,17 @@
         drag.className = 'rw-card-drag';
         drag.title = '拖动到其他分类';
         drag.textContent = '⠿';
-        nameRow.append(name, drag);
+        const removeImage = document.createElement('button');
+        removeImage.type = 'button';
+        removeImage.className = 'rw-delete-image';
+        removeImage.title = '从当前任务中删除这张图片';
+        removeImage.setAttribute('aria-label', `删除图片 ${fileNameFor(result)}`);
+        removeImage.textContent = '删除';
+        removeImage.addEventListener('click', event => {
+            event.stopPropagation();
+            deleteResult(result);
+        });
+        nameRow.append(name, drag, removeImage);
         const meta = document.createElement('div');
         meta.className = 'rw-card-meta';
         const confidence = Number(result.validation?.confidence);
@@ -554,13 +632,75 @@
 
     function moveResult(result, category, notify) {
         if (!CATEGORY_META[category] || result.reviewCategory === category) return;
-        const from = CATEGORY_META[result.reviewCategory].label;
+        const fromCategory = result.reviewCategory;
+        const from = CATEGORY_META[fromCategory]?.label || '原分类';
+        const fromResults = categoryResults(fromCategory);
+        const fromIndex = Math.max(0, fromResults.indexOf(result));
         result.reviewCategory = category;
         syncResultFlags(result, `人工把图片从“${from}”移动到“${CATEGORY_META[category].label}”`);
-        CATEGORY_KEYS.forEach(key => deckIndices[key] = 0);
+        const issue = issueFor(result);
+        let finalCategory = category;
+        if (issue && category !== 'error') {
+            finalCategory = 'error';
+            result.reviewCategory = 'error';
+            syncResultFlags(result, `${issue}；已自动保留到 error`);
+        }
+        const remainingSourceCount = currentResults().filter(item => item.reviewCategory === fromCategory).length;
+        deckIndices[fromCategory] = clamp(fromIndex, 0, Math.max(0, remainingSourceCount - 1));
+        if (activeFilter === finalCategory || activeFilter === 'all') {
+            const destinationResults = currentResults().filter(item => item.reviewCategory === finalCategory);
+            deckIndices[finalCategory] = Math.max(0, destinationResults.indexOf(result));
+        }
         render();
         if (editingResult === result) renderEditor();
-        if (notify) showToast(`已把 ${fileNameFor(result)} 移到“${CATEGORY_META[category].label}”`);
+        if (notify) {
+            showToast(finalCategory === category
+                ? `已把 ${fileNameFor(result)} 移到“${CATEGORY_META[category].label}”`
+                : `${fileNameFor(result)} 不符合“${CATEGORY_META[category].label}”规则，已放入 error`);
+        }
+    }
+
+    function deleteResult(result) {
+        const fileName = fileNameFor(result);
+        if (!demoMode && !confirm(`确定从当前任务中删除“${fileName}”吗？\n\n删除后它不会进入任务包；此操作不删除电脑上的原始文件。`)) return;
+
+        const resultIndex = currentResults().indexOf(result);
+        if (resultIndex >= 0) currentResults().splice(resultIndex, 1);
+
+        let fileIndex = state.files.findIndex(file => file === result.file);
+        if (fileIndex < 0) fileIndex = state.files.findIndex(file => file.name === fileName);
+        if (fileIndex >= 0) state.files.splice(fileIndex, 1);
+
+        const objectUrl = objectUrls.get(result);
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+
+        if (editingResult === result) {
+            editorBackdrop.classList.remove('rw-open');
+            editorBackdrop.setAttribute('aria-hidden', 'true');
+            editingResult = null;
+        }
+
+        if (typeof renderFileList === 'function') renderFileList();
+        if (state.files.length && typeof switchFile === 'function') {
+            const nextIndex = clamp(fileIndex >= 0 ? fileIndex : state.currentFileIndex, 0, state.files.length - 1);
+            switchFile(nextIndex);
+        } else if (!state.files.length) {
+            state.currentFileIndex = 0;
+            state.file = null;
+            state.img = null;
+            state.annotations = [];
+            try {
+                els.imageCanvas.getContext('2d').clearRect(0, 0, els.imageCanvas.width, els.imageCanvas.height);
+                els.overlayCanvas.getContext('2d').clearRect(0, 0, els.overlayCanvas.width, els.overlayCanvas.height);
+            } catch (_) {}
+        }
+
+        CATEGORY_KEYS.forEach(category => {
+            const count = currentResults().filter(item => item.reviewCategory === category).length;
+            deckIndices[category] = clamp(deckIndices[category], 0, Math.max(0, count - 1));
+        });
+        render();
+        showToast(`已从任务中删除 ${fileName}`);
     }
 
     function openEditor(result) {
@@ -706,7 +846,7 @@
             ? '符合规则：图片和包含标注行的 TXT 将保存到 normal。'
             : editingResult.reviewCategory === 'background'
                 ? '符合规则：图片和 0 KB 空 TXT 将保存到 background。'
-                : '该图片会单独保存到 manual_review，不会伪装成已确认数据。');
+                : '该图片会完整保存到 error；可以保留现有框，也可以继续人工修改。');
         root.querySelector('[data-rw-box-count]').textContent = `${editingResult.annotations.length} 个`;
         const list = root.querySelector('.rw-box-list');
         list.replaceChildren();
@@ -766,7 +906,7 @@
         const label = getDefaultLabel();
         getClassId(label);
         editingResult.annotations.push({ label, box_2d: [410, 420, 590, 580], manual: true });
-        editingResult.reviewCategory = editingResult.reviewCategory === 'background' ? 'review' : editingResult.reviewCategory;
+        editingResult.reviewCategory = editingResult.reviewCategory === 'background' ? 'error' : editingResult.reviewCategory;
         selectedBoxIndex = editingResult.annotations.length - 1;
         syncResultFlags(editingResult, '人工新增了标注框');
         renderEditor();
@@ -826,10 +966,28 @@
     }
 
     async function buildReviewedPackage() {
+        prepareResults();
         const results = currentResults();
-        const conflicts = results.filter(issueFor);
-        if (conflicts.length) throw new Error(`还有 ${conflicts.length} 张图片存在规则冲突`);
-        results.forEach(result => (result.annotations || []).forEach(annotation => getClassId(annotation.label)));
+        results.forEach(result => {
+            const boxes = Array.isArray(result.annotations) ? result.annotations : [];
+            const validNormal =
+                result.reviewCategory === 'normal' &&
+                !result.needsReview &&
+                boxes.length > 0 &&
+                boxes.every(isValidBox);
+            const validBackground =
+                result.reviewCategory === 'background' &&
+                result.verifiedEmpty === true &&
+                boxes.length === 0;
+            if (!validNormal && !validBackground) {
+                result.reviewCategory = 'error';
+                result.verifiedEmpty = false;
+                result.needsReview = true;
+            }
+        });
+        results.forEach(result => (result.annotations || [])
+            .filter(isValidBox)
+            .forEach(annotation => getClassId(annotation.label.trim())));
         const zip = new JSZip();
         const manifest = {
             formatVersion: 1,
@@ -844,7 +1002,7 @@
             '',
             'normal：人工确认可用的正样本。',
             'background：人工或安全机制确认无目标；labels 中 TXT 为 0 KB。',
-            'manual_review：仍需后续处理的数据，不应直接混入训练集。',
+            'error：识别失败、结果缺失、未确认空结果或规则异常的数据；原图和当前 TXT 都会保留。',
             '',
             '每个分类都按 images / labels 对应保存。'
         ].join('\n'));
@@ -854,17 +1012,22 @@
             const name = fileNameFor(result).replace(/[\\/:*?"<>|]/g, '_');
             const labelName = `${baseName(name)}.txt`;
             const text = yoloTextFor(result);
+            const validAnnotationCount = (result.annotations || []).filter(isValidBox).length;
             await addSourceFile(zip, `${folder}/images/${name}`, result);
             zip.file(`${folder}/labels/${labelName}`, text);
             manifest.items.push({
                 fileName: name,
                 category,
                 folder,
-                annotationCount: result.annotations.length,
+                imagePath: `${folder}/images/${name}`,
+                labelPath: `${folder}/labels/${labelName}`,
+                annotationCount: validAnnotationCount,
+                rawAnnotationCount: result.annotations.length,
                 txtBytes: textBytes(text),
                 verifiedEmpty: result.verifiedEmpty === true,
                 needsReview: result.needsReview === true,
                 manualReviewed: result.manualReviewed === true,
+                processingError: result.processingError || null,
                 validationStatus: result.validation?.status || null,
                 validationReason: result.validation?.reason || null
             });
@@ -875,11 +1038,8 @@
 
     async function exportReviewedPackage() {
         const buttons = Array.from(root.querySelectorAll('[data-rw-action="export"]'));
-        const conflicts = currentResults().filter(issueFor);
-        if (conflicts.length) {
-            showToast(`还有 ${conflicts.length} 张图片存在规则冲突，暂不能导出`, true);
-            return;
-        }
+        prepareResults();
+        if (!currentResults().length) return showToast('当前任务没有可导出的图片', true);
         buttons.forEach(button => button.disabled = true);
         const oldStatus = els?.statusMsg?.textContent || '';
         try {
@@ -922,7 +1082,7 @@
             if (els?.statusMsg) els.statusMsg.textContent = `分类复核任务包导出失败：${error.message}`;
             showToast(`导出失败：${error.message}`, true);
         } finally {
-            buttons.forEach(button => button.disabled = currentResults().some(issueFor));
+            buttons.forEach(button => button.disabled = currentResults().length === 0);
             if (!currentResults().length && els?.statusMsg) els.statusMsg.textContent = oldStatus;
         }
     }
@@ -952,11 +1112,11 @@
             alert('当前复核台先用于图片 YOLO 标注；视频帧复核将在后续版本单独设计。');
             return false;
         }
+        prepareResults();
         if (!currentResults().length) {
-            alert('暂无图片识别结果，请先完成图片分析。');
+            alert('当前任务没有可复核的图片。');
             return false;
         }
-        prepareResults();
         root.classList.add('rw-open');
         root.setAttribute('aria-hidden', 'false');
         document.body.classList.add('rw-no-scroll');
@@ -999,10 +1159,10 @@
             ['empty_D_000036.jpg','background',[]],
             ['empty_D_000037.jpg','background',[]],
             ['empty_E_000418.jpg','background',[]],
-            ['review_F_000092.jpg','review',[[370,580,430,615]]],
-            ['review_F_000093.jpg','review',[[600,290,710,355],[460,805,505,830]]],
-            ['review_G_000007.jpg','review',[]],
-            ['review_G_000008.jpg','review',[[520,115,585,150],[650,510,740,560],[260,830,310,855]]]
+            ['error_F_000092.jpg','error',[[370,580,430,615]]],
+            ['error_F_000093.jpg','error',[[600,290,710,355],[460,805,505,830]]],
+            ['error_G_000007.jpg','error',[]],
+            ['error_G_000008.jpg','error',[[520,115,585,150],[650,510,740,560],[260,830,310,855]]]
         ];
         state.unifiedClassMap.clear();
         state.nextClassId = 0;
@@ -1018,17 +1178,24 @@
                 annotations,
                 reviewCategory: category,
                 verifiedEmpty: category === 'background',
-                needsReview: category === 'review',
+                needsReview: category === 'error',
                 validation: {
-                    status: category === 'background' ? 'verified_empty' : category === 'review' ? 'needs_review' : 'detected',
-                    confidence: category === 'review' ? .58 : .96,
+                    status: category === 'background' ? 'verified_empty' : category === 'error' ? 'needs_review' : 'detected',
+                    confidence: category === 'error' ? .58 : .96,
                     verifiedEmpty: category === 'background',
-                    needsReview: category === 'review',
+                    needsReview: category === 'error',
                     reason: '组合页面交互测试数据'
                 }
             };
         });
-        state.files = results.map(result => result.file);
+        const missingResultName = 'missing_H_000001.jpg';
+        const missingResultDataUrl = createDemoImage(specifications.length + 1, []);
+        const missingResultFile = new File(
+            [decodeURIComponent(missingResultDataUrl.split(',')[1])],
+            missingResultName,
+            { type: 'image/svg+xml' }
+        );
+        state.files = [...results.map(result => result.file), missingResultFile];
         state.imageResults = results;
         state.isVideoMode = false;
         state.currentFileIndex = 0;
@@ -1050,6 +1217,7 @@
         close,
         render,
         buildReviewedPackage,
+        exportReviewedPackage,
         lastDemoExport: null
     };
 

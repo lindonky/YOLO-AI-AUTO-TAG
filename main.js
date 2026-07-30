@@ -760,8 +760,16 @@ async function startAnalysis() {
             await window.AppConfigManager.testConnection();
         } catch (error) {
             const message = String(error?.message || error || '连接测试失败');
+            if (!state.isVideoMode) {
+                const files = state.files && state.files.length ? state.files : (state.file ? [state.file] : []);
+                files.forEach(file => recordImageProcessingError(file, `API 预检失败，未执行识别：${message}`));
+            }
             els.statusMsg.textContent = `无法开始分析：${message}`;
-            alert(`无法开始分析\n\n${message}\n\n请在“API 设置”中测试配置，或稍后重试。`);
+            alert(
+                `无法开始分析\n\n${message}\n\n` +
+                `请在“API 设置”中测试配置，或稍后重试。\n` +
+                `当前导入图片已保留到复核台的 error 分类，可连同同名 TXT 一起导出。`
+            );
             window.AppConfigManager.open?.();
             return;
         }
@@ -780,10 +788,11 @@ async function startAnalysis() {
                 const firstError = batchSummary.errors?.[0]?.message || '未知错误';
                 alert(
                     `本次识别成功 ${batchSummary.succeeded} 张，失败 ${batchSummary.failed} 张。\n\n` +
-                    `首个错误：${firstError}\n\n失败图片未写入空标注，可修复配置后再次开始分析。`
+                    `首个错误：${firstError}\n\n` +
+                    `失败图片已保留到 error；每张图片仍会导出同名 TXT，修复配置后也可再次分析。`
                 );
             }
-            if (batchSummary?.availableResults > 0 && window.ReviewWorkspace?.open) {
+            if ((state.files?.length || 0) > 0 && window.ReviewWorkspace?.open) {
                 window.ReviewWorkspace.open({ reason: 'analysis-complete' });
             }
         }
@@ -2199,45 +2208,50 @@ async function processImagesBatch(config) {
     const isSingleFile = total === 1;
 
     const worker = async (file) => {
-        const { img, dataUrl } = await readImageFile(file);
-        const detection = await processImageTwoStage(
-            config,
-            isSingleFile,
-            img,
-            false,
-            boxes => showAnnotationsForFile(file, boxes)
-        );
-        const anns = detection.boxes;
-        const result = {
-            fileName: file.name,
-            file,
-            annotations: JSON.parse(JSON.stringify(anns)),
-            dataUrl,
-            validation: detection.validation,
-            verifiedEmpty: detection.validation?.verifiedEmpty === true,
-            needsReview: detection.validation?.needsReview === true
-        };
+        try {
+            const { img, dataUrl } = await readImageFile(file);
+            const detection = await processImageTwoStage(
+                config,
+                isSingleFile,
+                img,
+                false,
+                boxes => showAnnotationsForFile(file, boxes)
+            );
+            const anns = detection.boxes;
+            const result = {
+                fileName: file.name,
+                file,
+                annotations: JSON.parse(JSON.stringify(anns)),
+                dataUrl,
+                validation: detection.validation,
+                verifiedEmpty: detection.validation?.verifiedEmpty === true,
+                needsReview: detection.validation?.needsReview === true
+            };
 
-        const existingIndex = state.imageResults.findIndex(item =>
-            item.file === file || item.fileName === file.name
-        );
+            const existingIndex = state.imageResults.findIndex(item =>
+                item.file === file || item.fileName === file.name
+            );
 
-        let resultIndex;
-        if (existingIndex >= 0) {
-            state.imageResults[existingIndex] = result;
-            resultIndex = existingIndex;
-        } else {
-            state.imageResults.push(result);
-            resultIndex = state.imageResults.length - 1;
-        }
+            let resultIndex;
+            if (existingIndex >= 0) {
+                state.imageResults[existingIndex] = result;
+                resultIndex = existingIndex;
+            } else {
+                state.imageResults.push(result);
+                resultIndex = state.imageResults.length - 1;
+            }
 
-        appendTimelineItem(file, anns, resultIndex, result);
-        appendCropGallery(anns);
-        showAnnotationsForFile(file, anns);
-        
-        if (!isSingleFile) {
-            completed++;
-            updateProgress(Math.round((completed / total) * 100), `批量处理中: ${completed}/${total}`);
+            appendTimelineItem(file, anns, resultIndex, result);
+            appendCropGallery(anns);
+            showAnnotationsForFile(file, anns);
+        } catch (error) {
+            recordImageProcessingError(file, String(error?.message || error || '未知错误'));
+            throw error;
+        } finally {
+            if (!isSingleFile) {
+                completed++;
+                updateProgress(Math.round((completed / total) * 100), `批量处理中: ${completed}/${total}`);
+            }
         }
     };
     
@@ -2292,6 +2306,40 @@ async function processImagesBatch(config) {
     }
 
     return batchSummary;
+}
+
+function recordImageProcessingError(file, message) {
+    if (!file) return null;
+    if (!Array.isArray(state.imageResults)) state.imageResults = [];
+    const normalizedMessage = String(message || '未知错误');
+    const existingIndex = state.imageResults.findIndex(item =>
+        item.file === file || item.fileName === file.name
+    );
+    const existing = existingIndex >= 0 ? state.imageResults[existingIndex] : null;
+    const annotations = Array.isArray(existing?.annotations)
+        ? JSON.parse(JSON.stringify(existing.annotations))
+        : [];
+    const result = {
+        ...(existing || {}),
+        fileName: file.name,
+        file,
+        annotations,
+        reviewCategory: 'error',
+        processingError: normalizedMessage,
+        verifiedEmpty: false,
+        needsReview: true,
+        validation: {
+            ...(existing?.validation || {}),
+            status: 'processing_error',
+            verifiedEmpty: false,
+            needsReview: true,
+            estimatedCount: annotations.length,
+            reason: normalizedMessage
+        }
+    };
+    if (existingIndex >= 0) state.imageResults[existingIndex] = result;
+    else state.imageResults.push(result);
+    return result;
 }
 
 async function processVideosBatch(config) {
@@ -2475,92 +2523,10 @@ async function exportAllTransparentImages() {
 }
 
 async function exportBatchImageLabels() {
-    if (!state.imageResults || state.imageResults.length === 0) return alert('暂无图片标注结果');
-    const resultMap = new Map(state.imageResults.map(r => [r.fileName, r]));
-    const unsafeFiles = state.files.filter(file => {
-        const item = resultMap.get(file.name);
-        if (!item) return true;
-        if (item.needsReview) return true;
-        const annotations = Array.isArray(item.annotations) ? item.annotations : [];
-        return annotations.length === 0 && item.verifiedEmpty !== true;
-    });
-    if (unsafeFiles.length > 0) {
-        const preview = unsafeFiles.slice(0, 12).map(file => `• ${file.name}`).join('\n');
-        const more = unsafeFiles.length > 12 ? `\n…另有 ${unsafeFiles.length - 12} 张` : '';
-        return alert(
-            `为防止漏检图片被写成错误的 0KB 负样本，已停止导出。\n\n` +
-            `以下 ${unsafeFiles.length} 张尚未被确认“确实无目标”，请重新分析或人工框选：\n${preview}${more}`
-        );
+    if (window.ReviewWorkspace?.exportReviewedPackage) {
+        return window.ReviewWorkspace.exportReviewedPackage();
     }
-    const zip = new JSZip();
-    
-    // 确保所有结果中的标签都已注册到统一映射中
-    state.imageResults.forEach(item => {
-        if (item.annotations && item.annotations.length > 0) {
-            item.annotations.forEach(ann => getClassId(ann.label));
-        }
-    });
-    
-    const classes = getAllClasses();
-    
-    // 即使 classes 为空（全都没识别到），也应该生成 zip
-    if (classes.length > 0) {
-        zip.file('classes.txt', classes.join('\n'));
-    }
-
-    // ...
-    
-    // 修正：我们重新遍历所有输入文件 state.files，而不是只遍历 state.imageResults
-    // 但 state.imageResults 保存了分析结果。我们需要将文件名映射回结果。
-    
-    // 调试日志
-    console.log("Files:", state.files.map(f => f.name));
-    console.log("Results:", state.imageResults.map(r => r.fileName));
-
-    for (const file of state.files) {
-        const item = resultMap.get(file.name);
-        
-        // ... (文件名处理保持不变)
-        let baseName = file.name;
-        const lastDotIndex = file.name.lastIndexOf('.');
-        if (lastDotIndex !== -1) {
-            baseName = file.name.substring(0, lastDotIndex);
-        }
-        const txtName = baseName + '.txt';
-
-        // ... (写入逻辑)
-        if (item && item.annotations && item.annotations.length > 0) {
-            const lines = item.annotations.map(ann => {
-                const clsId = getClassId(ann.label);
-                // ...
-                if (!ann.box_2d || ann.box_2d.length !== 4) return null;
-                const [ymin, xmin, ymax, xmax] = ann.box_2d;
-                // ...
-                const cx = ((xmin + xmax) / 2) / 1000;
-                const cy = ((ymin + ymax) / 2) / 1000;
-                const w = (xmax - xmin) / 1000;
-                const h = (ymax - ymin) / 1000;
-                return `${clsId} ${cx.toFixed(6)} ${cy.toFixed(6)} ${w.toFixed(6)} ${h.toFixed(6)}`;
-            }).filter(line => line !== null);
-            
-            if (lines.length > 0) {
-                zip.file(txtName, lines.join('\n'));
-            } else {
-                return alert(`文件 ${file.name} 的标注框无效，已停止导出，请重新分析该图片。`);
-            }
-        } else if (item && item.verifiedEmpty === true) {
-            // 只有经过独立存在性复核并以 >= 0.90 置信度确认无目标，才允许空 TXT。
-            zip.file(txtName, "");
-        } else {
-            return alert(`文件 ${file.name} 尚未确认无目标，已停止导出。`);
-        }
-    }
-
-    const blob = await zip.generateAsync({ type: 'blob' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `image_labels_yolo_${Date.now()}.zip`;
-    a.click();
+    alert('分类复核模块尚未加载完成，请刷新页面后重试。');
 }
 
 async function exportBatchVideoFrames() {
