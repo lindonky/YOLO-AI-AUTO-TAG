@@ -5,25 +5,36 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YOLO Auto-Tag</title>
     <link rel="icon" type="image/png" href="app_icon.png">
+    <script>
+        // 桌面端默认使用深色工具主题，并在 CSS 解析前应用，避免启动时先白后黑的闪屏。
+        try {
+            if (localStorage.getItem('theme') !== 'light') {
+                document.documentElement.classList.add('dark');
+            }
+        } catch (_error) {
+            document.documentElement.classList.add('dark');
+        }
+    </script>
     <link rel="stylesheet" href="style.css?v=20260726-teaching-ui2">
-    <link rel="stylesheet" href="review_workspace.css?v=20260730-error-export1">
+    <link rel="stylesheet" href="review_workspace.css?v=20260803-glass-v3b">
+    <link rel="stylesheet" href="desktop_ui.css?v=20260803-glass-v3b">
 
 </head>
-<body class="bg-gray-50 dark:bg-gray-900 h-screen flex flex-col overflow-hidden transition-colors duration-200">
+<body class="app-shell bg-gray-50 dark:bg-gray-900 h-screen flex flex-col overflow-hidden transition-colors duration-200">
     <!-- Top Navigation Bar -->
-    <div class="h-16 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center px-4 justify-between shrink-0 z-20 shadow-sm transition-colors duration-200">
+    <div class="app-commandbar h-16 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center px-4 justify-between shrink-0 z-20 shadow-sm transition-colors duration-200" role="toolbar" aria-label="应用命令栏">
         <!-- Left: Logo & Mode -->
-        <div class="flex items-center gap-4">
-            <div class="flex items-center gap-2 text-indigo-600 dark:text-indigo-400">
-                <div class="bg-indigo-600 p-1.5 rounded-lg text-white">
+        <div class="app-commandbar-left flex items-center gap-4">
+            <div class="app-brand flex items-center gap-2 text-indigo-600 dark:text-indigo-400" title="YOLO Auto-Tag">
+                <div id="appBrandGlyph" class="bg-indigo-600 p-1.5 rounded-lg text-white" aria-label="图片模式">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 17l4.5-4.5 3 3L15 12l5 5M6 20h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Zm9-11h.01" />
                     </svg>
                 </div>
             </div>
             
             <!-- Mode Toggle -->
-            <div class="flex items-center bg-gray-100 dark:bg-gray-700 rounded-full p-1 px-1 transition-colors">
+            <div class="app-mode-switch flex items-center bg-gray-100 dark:bg-gray-700 rounded-full p-1 px-1 transition-colors">
                 <label class="relative inline-flex items-center cursor-pointer">
                     <input type="checkbox" id="modeToggle" class="sr-only peer">
                     <div class="w-11 h-6 bg-gray-300 dark:bg-gray-600 peer-focus:ring-2 peer-focus:ring-indigo-300 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
@@ -32,8 +43,8 @@
             </div>
 
 <!-- File Button (Merged "Import" and "Direct Export") -->
-<div class="relative">
-    <button id="fileBtn" onclick="toggleDropdown('fileMenu')" class="flex items-center gap-1 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-sm transition">
+<div class="app-menu-slot relative">
+    <button id="fileBtn" onclick="toggleDropdown('fileMenu')" class="flex items-center gap-1 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-sm transition" aria-haspopup="menu" aria-controls="fileMenu" aria-expanded="false">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-gray-500 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
         </svg>
@@ -42,7 +53,7 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
         </svg>
     </button>
-    <div id="fileMenu" class="absolute left-0 mt-2 w-56 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-100 dark:border-gray-700 hidden z-50 p-1">
+    <div id="fileMenu" class="app-menu absolute left-0 mt-2 w-56 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-100 dark:border-gray-700 hidden z-50 p-1" role="menu" aria-label="文件菜单">
         <div class="px-2 py-1 text-[10px] uppercase font-bold text-gray-400 tracking-wider">导入数据</div>
         <label class="cursor-pointer block w-full text-left px-3 py-2 text-xs text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 rounded transition flex items-center gap-2">
             <svg class="h-4 w-4 text-indigo-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
@@ -78,10 +89,10 @@
 </div>        </div>
 
         <!-- Middle: Controls -->
-        <div class="flex items-center gap-3 flex-1 px-4 z-50">
+        <div class="app-command-center flex items-center gap-3 flex-1 px-4 z-50">
 <!-- Settings Button (Merged "Model", "Global Params", "Task Config" and "Mode Params") -->
-<div class="relative">
-    <button id="settingsBtn" onclick="toggleDropdown('settingsMenu')" class="flex items-center gap-1 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-sm transition">
+<div class="app-menu-slot relative">
+    <button id="settingsBtn" onclick="toggleDropdown('settingsMenu')" class="flex items-center gap-1 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-600 px-3 py-1.5 rounded-lg text-xs font-semibold shadow-sm transition" aria-haspopup="dialog" aria-controls="settingsMenu" aria-expanded="false">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-gray-500 dark:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -91,7 +102,7 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
         </svg>
     </button>
-    <div id="settingsMenu" class="absolute top-full left-0 mt-1 w-72 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-100 dark:border-gray-700 hidden z-50 p-3 space-y-3 max-h-[85vh] overflow-y-auto">
+    <div id="settingsMenu" class="app-settings-inspector absolute top-full left-0 mt-1 w-72 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-100 dark:border-gray-700 hidden z-50 p-3 space-y-3 max-h-[85vh] overflow-y-auto" role="dialog" aria-label="任务与识别设置">
 
         <!-- 1. Model Selection -->
         <div class="space-y-1">
@@ -169,11 +180,17 @@
                 <label class="text-xs text-gray-600 dark:text-gray-300">Scale:</label>
                 <input type="number" id="scaleFactor" value="4" min="1" step="0.1" class="w-16 p-1 text-xs border border-gray-200 dark:border-gray-600 rounded text-center dark:bg-gray-700 dark:text-gray-200">
             </div>
+            <label class="flex items-center justify-between gap-2 text-xs text-gray-600 dark:text-gray-300">
+                <span>逐类复核漏检（有目标图多一次请求）</span>
+                <input type="checkbox" id="verifyDetections" checked class="w-4 h-4">
+            </label>
             <div class="border-t dark:border-gray-700 pt-2 space-y-2">
                 <div class="flex items-center justify-between">
                     <div class="text-[10px] font-bold text-gray-400 uppercase tracking-wider">人工示例教学</div>
                     <span class="text-[10px] text-indigo-500">最近 3 张参与识别</span>
                 </div>
+                <label for="teachingLabelSelect" class="text-xs">新框类别</label>
+                <select id="teachingLabelSelect" class="w-full p-1.5 rounded text-xs dark:bg-gray-700 dark:text-gray-200"><option value="target">target</option></select>
                 <button id="teachingModeBtn" type="button" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1.5 rounded text-xs font-bold transition">开始框选示例</button>
                 <div class="grid gap-1" style="grid-template-columns: repeat(3, minmax(0, 1fr));">
                     <button id="saveTeachingExampleBtn" type="button" class="bg-green-500 hover:bg-green-600 text-white px-1 py-1.5 rounded text-[10px] font-bold transition">保存示例</button>
@@ -212,7 +229,7 @@
     </div>
 </div>
              <!-- Prompt Input & Class Label -->
-            <div class="flex-1 flex gap-2">
+            <div class="app-querybar flex-1 flex gap-2">
                 <input type="text" id="classLabelInput" class="w-32 p-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 dark:bg-gray-700 dark:text-gray-200 shadow-sm" placeholder="类别名 (空格隔开)">
                 <input type="text" id="promptInput" class="flex-1 min-w-[200px] p-1.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 dark:bg-gray-700 dark:text-gray-200 shadow-sm" placeholder="描述目标外观和排除项；系统自动处理0个、1个或很多目标">
             </div>
@@ -221,7 +238,7 @@
 
 
         <!-- Right: Actions -->
-        <div class="flex items-center gap-2 ml-2">
+        <div class="app-command-actions flex items-center gap-2 ml-2">
             <!-- Task Controls -->
             <div id="taskControls" class="flex items-center gap-2 hidden">
                 <button id="pauseBtn" class="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-1.5 rounded-lg text-sm font-bold shadow-sm transition whitespace-nowrap">
@@ -250,7 +267,7 @@
             <button id="downloadBtn" class="hidden"></button>
 
             <!-- Theme Toggle -->
-             <button id="themeToggleBtn" class="p-2 text-gray-400 hover:text-yellow-500 rounded-lg transition">
+             <button id="themeToggleBtn" class="p-2 text-gray-400 hover:text-yellow-500 rounded-lg transition" type="button" aria-label="切换深色模式" title="切换深色模式">
                 <svg id="themeIconSun" xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
                 </svg>
@@ -262,10 +279,10 @@
     </div>
 
     <!-- Main Content Area -->
-    <div class="flex flex-1 overflow-hidden">
+    <div class="app-workbench flex flex-1 overflow-hidden">
         <!-- Sidebar: File List -->
-        <div class="w-64 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col shrink-0 transition-colors duration-200">
-            <div class="p-3 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
+        <div class="app-file-sidebar w-64 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col shrink-0 transition-colors duration-200">
+            <div class="app-pane-header p-3 border-b border-gray-100 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-750">
                 <span class="font-bold text-gray-700 dark:text-gray-200 text-sm">文件列表</span>
                 <span id="fileCount" class="bg-gray-200 dark:bg-gray-600 text-gray-600 dark:text-gray-200 text-xs px-2 py-0.5 rounded-full">0</span>
             </div>
@@ -285,20 +302,21 @@
         </div>
 
         <!-- Main Workspace -->
-        <div class="flex-1 bg-gray-100 dark:bg-gray-900 relative flex flex-col overflow-hidden transition-colors duration-200">
+        <div class="app-canvas-pane flex-1 bg-gray-100 dark:bg-gray-900 relative flex flex-col overflow-hidden transition-colors duration-200">
             <!-- Always-visible controls while drawing a teaching example -->
             <div id="teachingFloatingToolbar" class="hidden items-center gap-2 bg-white dark:bg-gray-800 border border-indigo-500 rounded-lg shadow-xl px-3 py-2" style="position:absolute; top:12px; left:50%; transform:translateX(-50%); z-index:25; min-width:620px; max-width:calc(100% - 32px);">
                 <div class="flex-1" style="min-width:0;">
                     <div class="text-xs font-bold text-indigo-600 dark:text-indigo-400">人工示例教学 · 在目标外沿拖动画框</div>
                     <div id="teachingFloatingStatus" class="text-[10px] text-gray-500 dark:text-gray-400 truncate">已保存 0 张 / 0 框 · 当前编辑 0 框</div>
                 </div>
+                <select id="teachingFloatingLabelSelect" aria-label="新框类别" class="p-1.5 rounded text-xs dark:bg-gray-700 dark:text-gray-200" style="max-width:140px"><option value="target">target</option></select>
                 <button id="saveTeachingFloatingBtn" type="button" class="bg-green-500 hover:bg-green-600 text-white px-3 py-1.5 rounded text-xs font-bold transition whitespace-nowrap">保存示例</button>
                 <button id="undoTeachingFloatingBtn" type="button" class="bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded text-xs font-bold transition whitespace-nowrap">撤销一框</button>
                 <button id="exitTeachingFloatingBtn" type="button" class="bg-yellow-500 hover:bg-yellow-600 text-white px-3 py-1.5 rounded text-xs font-bold transition whitespace-nowrap">退出框选</button>
             </div>
 
             <!-- Canvas/Video Area -->
-            <div class="flex-1 p-4 overflow-hidden flex items-center justify-center">
+            <div class="app-canvas-stage flex-1 p-4 overflow-hidden flex items-center justify-center">
                  <div class="video-wrapper border-2 border-dashed border-gray-300 dark:border-gray-700 shadow-sm rounded-lg relative" id="viewContainer">
                     <!-- Image Mode Canvas -->
                     <canvas id="imageCanvas" class="block w-full h-full"></canvas>
@@ -318,20 +336,20 @@
             </div>
             
             <!-- Bottom Status Bar -->
-            <div class="bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 p-1 px-4 flex justify-between items-center text-xs text-gray-500 dark:text-gray-400 shrink-0 transition-colors duration-200">
+            <div class="app-statusbar bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 p-1 px-4 flex justify-between items-center text-xs text-gray-500 dark:text-gray-400 shrink-0 transition-colors duration-200" role="status" aria-live="polite">
                 <p id="statusMsg" class="italic truncate max-w-lg">等待任务...</p>
                 <p id="apiInfo" class="font-mono"></p>
             </div>
         </div>
 
         <!-- Right Floating Toolbar -->
-        <div class="w-12 bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 flex flex-col items-center py-4 gap-4 shrink-0 z-10 transition-colors duration-200">
-             <button id="cropPreviewBtn" class="p-2 text-gray-500 dark:text-gray-400 hover:bg-indigo-50 dark:hover:bg-indigo-900 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg transition" title="剪裁预览">
+        <div class="app-toolrail w-12 bg-white dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 flex flex-col items-center py-4 gap-4 shrink-0 z-10 transition-colors duration-200" role="toolbar" aria-label="工作区面板">
+             <button id="cropPreviewBtn" class="p-2 text-gray-500 dark:text-gray-400 hover:bg-indigo-50 dark:hover:bg-indigo-900 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg transition" title="剪裁预览" type="button" aria-label="打开剪裁预览" aria-controls="cropPreview" aria-pressed="false">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.121 14.121L19 19m-7-7l7-7m-7 7l-2.879 2.879M12 12L9.121 9.121m0 5.758a3 3 0 10-4.243 4.243 3 3 0 004.243-4.243zm0-5.758a3 3 0 10-4.243-4.243 3 3 0 004.243 4.243z" />
                 </svg>
             </button>
-             <button id="timelineResultsBtn" class="p-2 text-gray-500 dark:text-gray-400 hover:bg-indigo-50 dark:hover:bg-indigo-900 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg transition" title="时间轴">
+             <button id="timelineResultsBtn" class="p-2 text-gray-500 dark:text-gray-400 hover:bg-indigo-50 dark:hover:bg-indigo-900 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg transition" title="时间轴" type="button" aria-label="打开时间轴" aria-controls="timelineResults" aria-pressed="false">
                 <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
@@ -341,11 +359,11 @@
     
 <!-- Task Menu has been merged into #settingsMenu, removed from here -->
     <!-- Crop Preview & Timeline (Same as before) -->
-    <div id="cropPreview" class="hidden absolute right-14 top-16 bottom-10 w-64 bg-white dark:bg-gray-800 shadow-2xl border-l border-gray-200 dark:border-gray-700 overflow-y-auto p-3 z-30 floating-panel transition-colors duration-200">
+    <div id="cropPreview" class="app-floating-inspector hidden absolute right-14 top-16 bottom-10 w-64 bg-white dark:bg-gray-800 shadow-2xl border-l border-gray-200 dark:border-gray-700 overflow-y-auto p-3 z-30 floating-panel transition-colors duration-200">
         <h3 class="font-bold text-gray-700 dark:text-gray-200 mb-2 border-l-4 border-emerald-500 pl-2 text-sm">提取区域预览</h3>
         <div id="cropGallery" class="space-y-3"></div>
     </div>
-    <div id="timelineResults" class="hidden absolute right-14 top-16 bottom-10 w-72 bg-white dark:bg-gray-800 shadow-2xl border-l border-gray-200 dark:border-gray-700 overflow-y-auto p-3 z-30 floating-panel transition-colors duration-200">
+    <div id="timelineResults" class="app-floating-inspector hidden absolute right-14 top-16 bottom-10 w-72 bg-white dark:bg-gray-800 shadow-2xl border-l border-gray-200 dark:border-gray-700 overflow-y-auto p-3 z-30 floating-panel transition-colors duration-200">
         <h3 class="font-bold text-gray-700 dark:text-gray-200 mb-2 border-l-4 border-indigo-500 pl-2 text-sm">追踪结果时间轴</h3>
         <div id="timelineContent" class="space-y-2"></div>
     </div>
@@ -363,8 +381,9 @@
         };
       }
     </script>
-    <script src="main.js?v=20260730-error-export1"></script>
-    <script src="task_manager.js?v=20260730-error-export1"></script>
-    <script src="review_workspace.js?v=20260730-error-export1"></script>
+    <script src="annotation_core.js?v=1.1"></script>
+    <script src="main.js?v=20260803-glass-v3b-v1.1"></script>
+    <script src="task_manager.js?v=20260803-glass-v3b"></script>
+    <script src="review_workspace.js?v=20260803-glass-v3b"></script>
 </body>
 </html>

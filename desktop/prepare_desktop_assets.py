@@ -27,10 +27,12 @@ def copy_frontend() -> None:
     for name in (
         "index.html",
         "main.js",
+        "annotation_core.js",
         "task_manager.js",
         "review_workspace.js",
         "style.css",
         "review_workspace.css",
+        "desktop_ui.css",
         "app_icon.png",
     ):
         shutil.copy2(PROJECT_ROOT / name, WEB_ROOT / name)
@@ -44,8 +46,8 @@ def patch_desktop_index() -> None:
     content = index_path.read_text(encoding="utf-8")
     config_pattern = re.compile(r'<script\s+src="config\.js[^"\n]*"></script>')
     replacement = (
-        '<script src="config.js?v=desktop-1.0"></script>\n'
-        '<script src="desktop_config.js?v=desktop-1.0-error-export1"></script>'
+        '<script src="config.js?v=desktop-1.1"></script>\n'
+        '<script src="desktop_config.js?v=desktop-1.1-error-export1"></script>'
     )
     content, count = config_pattern.subn(replacement, content, count=1)
     if count != 1:

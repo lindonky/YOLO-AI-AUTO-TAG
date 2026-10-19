@@ -3,6 +3,6 @@ const CONFIGS = {
     'user-api': {
         url: '/api/proxy/custom',
         key: 'desktop-managed',
-        model: 'gemini-3.6-flash'
+        model: 'gemini-3.8-flash-low'
     }
 };

@@ -92,9 +92,11 @@ def normalize_api_url(value: str) -> str:
     """Accept a relay home URL while preserving explicit custom API paths."""
     cleaned = validate_http_url(value, "API URL")
     parsed = urlparse(cleaned)
-    if parsed.path in {"", "/"}:
+    if parsed.path in {"", "/", "/v1", "/v1/"}:
         parsed = parsed._replace(path="/v1/chat/completions")
         return urlunparse(parsed)
+    if parsed.path.rstrip("/").endswith("/v1"):
+        return urlunparse(parsed._replace(path=parsed.path.rstrip("/") + "/chat/completions"))
     return cleaned
 
 
@@ -126,8 +128,8 @@ class SettingsStore:
             encrypted_key = str(data.get("api_key_dpapi", ""))
             return {
                 "configured": bool(data.get("api_url") and encrypted_key and data.get("model")),
-                "api_url": str(data.get("api_url", "")),
-                "model": str(data.get("model", "gemini-3.6-flash")),
+                "api_url": normalize_api_url(str(data["api_url"])) if data.get("api_url") else "",
+                "model": str(data.get("model", "gemini-3.8-flash-low")),
                 "proxy_url": str(data.get("proxy_url", "")),
                 "key_configured": bool(encrypted_key),
             }
@@ -137,9 +139,9 @@ class SettingsStore:
             data = self._load_unlocked()
             encrypted_key = str(data.get("api_key_dpapi", ""))
             return {
-                "api_url": str(data.get("api_url", "")),
+                "api_url": normalize_api_url(str(data["api_url"])) if data.get("api_url") else "",
                 "api_key": unprotect_text(encrypted_key) if encrypted_key else "",
-                "model": str(data.get("model", "gemini-3.6-flash")),
+                "model": str(data.get("model", "gemini-3.8-flash-low")),
                 "proxy_url": str(data.get("proxy_url", "")),
             }
 
@@ -147,6 +149,8 @@ class SettingsStore:
         if not isinstance(payload, dict):
             raise ValueError("配置请求格式错误")
         api_url = normalize_api_url(str(payload.get("api_url", "")))
+        if urlparse(api_url).path.rstrip("/").endswith("/responses"):
+            raise ValueError("本工具使用 Chat Completions，请填写以 /chat/completions 结尾的接口，不支持 Responses 地址")
         model = str(payload.get("model", "")).strip()
         if not model:
             raise ValueError("模型名称不能为空")

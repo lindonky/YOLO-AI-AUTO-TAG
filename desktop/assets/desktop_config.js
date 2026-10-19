@@ -4,10 +4,10 @@
     // 用户可见文案集中在这里，便于发布前逐句审核。
     const COPY = {
         appName: 'YOLO Auto-Tag',
-        version: 'V1.0',
+        version: 'V1.1',
         title: '首次使用配置',
         intro: '请输入你自己的中转站 URL、API Key 和模型名称。配置只保存在本机；API Key 使用 Windows DPAPI 加密，不会写入网页文件。',
-        urlHelp: '可填写中转站首页或完整聊天接口；首页地址会自动补全 /v1/chat/completions。',
+        urlHelp: '可填写完整 /v1/chat/completions 地址；首页或以 /v1 结尾的基础地址会自动补全。',
         keyHelp: '首次配置必须填写；以后留空表示继续使用已经安全保存的 Key。',
         proxyHelp: '选填。使用 Mihomo 时可填写 http://127.0.0.1:7897；留空时尝试 Windows 系统代理或直连。',
         declaration: '本软件用于辅助整理和标注用户自行选择的图片或视频资料。AI 结果可能出现漏检、误检或框选偏差，正式训练或发布数据集前仍应由用户复核。API 请求仅发送到用户自行填写的中转站。',
@@ -22,6 +22,22 @@
 
         async init() {
             this.buildUi();
+            if (window.YOLO_UI_PREVIEW === true) {
+                this.ready = true;
+                document.getElementById('desktopConfigModal')?.remove();
+                document.getElementById('desktopConfigBtn')?.remove();
+                const startButton = document.getElementById('startBtn');
+                if (startButton) {
+                    startButton.disabled = true;
+                    startButton.title = 'UI 预览版不会发送识别请求';
+                }
+                const versionBadge = document.getElementById('desktopVersionBadge');
+                if (versionBadge) {
+                    versionBadge.textContent = 'UI PREVIEW V2';
+                    versionBadge.title = '仅供界面确认，不会发送 API 请求';
+                }
+                return;
+            }
             this.bindStartGuard();
             await this.refresh();
         },
@@ -40,20 +56,20 @@
                 .desktop-field input { width: 100%; border: 1px solid #d1d5db; border-radius: 8px; padding: 9px 11px; font-size: 13px; background: #fff; color: #111827; }
                 .dark .desktop-field input { border-color: #4b5563; background: #111827; color: #f3f4f6; }
                 .desktop-help { margin-top: 5px; color: #6b7280; font-size: 11px; line-height: 1.5; }
-                .desktop-declaration { border-radius: 8px; background: #eef2ff; color: #3730a3; padding: 10px 12px; font-size: 11px; line-height: 1.6; }
-                .dark .desktop-declaration { background: #312e81; color: #e0e7ff; }
+                .desktop-declaration { border-radius: 18px; border: 1px solid rgba(128,203,196,.28); background: rgba(128,203,196,.08); color: inherit; padding: 10px 12px; font-size: 11px; line-height: 1.6; }
+                .dark .desktop-declaration { background: rgba(128,203,196,.08); color: #dfe8e8; }
                 .desktop-config-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; padding: 14px 22px 20px; }
-                .desktop-action { border-radius: 8px; padding: 8px 14px; font-size: 12px; font-weight: 700; cursor: pointer; }
-                .desktop-primary { background: #4f46e5; color: #fff; }
+                .desktop-action { border-radius: 999px; padding: 8px 14px; font-size: 12px; font-weight: 700; cursor: pointer; }
+                .desktop-primary { border: 1px solid rgba(128,203,196,.65); background: rgba(128,203,196,.18); color: #effffc; }
                 .desktop-secondary { background: #e5e7eb; color: #374151; }
                 .desktop-test { background: #16a34a; color: #fff; }
                 .desktop-status { flex: 1; font-size: 11px; color: #6b7280; }
-                #desktopConfigBtn { background: #0f766e; color: #fff; padding: 6px 10px; border-radius: 8px; font-size: 12px; font-weight: 700; white-space: nowrap; }
-                #desktopVersionBadge { margin-right: 8px; border-radius: 999px; padding: 2px 7px; background: #e0e7ff; color: #3730a3; font-size: 10px; font-weight: 800; white-space: nowrap; }
-                .dark #desktopVersionBadge { background: #312e81; color: #e0e7ff; }
-                #desktopRepositoryFooter { font-size: 10px; color: #4f46e5; white-space: nowrap; margin-right: 10px; text-decoration: none; }
-                #desktopRepositoryFooter:hover { color: #4338ca; text-decoration: underline; }
-                .dark #desktopRepositoryFooter { color: #a5b4fc; }
+                #desktopConfigBtn { border: 1px solid rgba(255,255,255,.13); background: rgba(255,255,255,.055); color: #eef3f3; padding: 6px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+                #desktopVersionBadge { margin-right: 8px; border: 1px solid rgba(128,203,196,.35); border-radius: 999px; padding: 2px 7px; background: rgba(128,203,196,.08); color: #5faaa3; font-size: 10px; font-weight: 800; white-space: nowrap; }
+                .dark #desktopVersionBadge { background: rgba(128,203,196,.08); color: #a9e2dd; }
+                #desktopRepositoryFooter { font-size: 10px; color: #5faaa3; white-space: nowrap; margin-right: 10px; text-decoration: none; }
+                #desktopRepositoryFooter:hover { color: #80cbc4; text-decoration: underline; }
+                .dark #desktopRepositoryFooter { color: #80cbc4; }
             `;
             document.head.appendChild(style);
 
@@ -64,7 +80,7 @@
                     <div class="desktop-config-head">
                         <div style="display:flex;align-items:center;gap:9px;">
                             <div id="desktopConfigTitle" style="font-size:18px;font-weight:800;">${COPY.title}</div>
-                            <span style="border-radius:999px;padding:2px 8px;background:#e0e7ff;color:#3730a3;font-size:11px;font-weight:800;">${COPY.version}</span>
+                            <span style="border:1px solid rgba(128,203,196,.35);border-radius:999px;padding:2px 8px;background:rgba(128,203,196,.08);color:#80cbc4;font-size:11px;font-weight:800;">${COPY.version}</span>
                         </div>
                         <div style="font-size:12px;font-weight:700;margin-top:6px;">${COPY.appName}</div>
                         <div style="font-size:12px;color:#6b7280;margin-top:6px;line-height:1.6;">${COPY.intro}</div>
@@ -82,7 +98,7 @@
                         </div>
                         <div class="desktop-field">
                             <label for="desktopModel">模型名称</label>
-                            <input id="desktopModel" type="text" value="gemini-3.6-flash" autocomplete="off">
+                            <input id="desktopModel" type="text" value="gemini-3.8-flash-low" autocomplete="off">
                         </div>
                         <div class="desktop-field">
                             <label for="desktopProxyUrl">网络代理 URL（选填）</label>
@@ -155,10 +171,10 @@
                 this.publicConfig = data;
                 this.configured = Boolean(data.configured);
                 document.getElementById('desktopApiUrl').value = data.api_url || '';
-                document.getElementById('desktopModel').value = data.model || 'gemini-3.6-flash';
+                document.getElementById('desktopModel').value = data.model || 'gemini-3.8-flash-low';
                 document.getElementById('desktopProxyUrl').value = data.proxy_url || '';
                 document.getElementById('desktopApiKey').value = '';
-                this.applyModel(data.model || 'gemini-3.6-flash');
+                this.applyModel(data.model || 'gemini-3.8-flash-low');
                 this.setStatus(this.configured ? '配置已就绪' : '首次使用，请填写完整配置', !this.configured);
                 if (!this.configured) this.open();
             } catch (error) {

@@ -16,7 +16,23 @@
         }
     };
     const CATEGORY_KEYS = Object.keys(CATEGORY_META);
-    const FLIP_DURATION = 470;
+    const FLIP_DURATION = 420;
+    const MECHANICAL_CARD_CLASSES = [
+        'rw-card-active',
+        'rw-card-peek-before',
+        'rw-card-peek-after',
+        'rw-card-hidden-before',
+        'rw-card-hidden-after',
+        'rw-card-covered',
+        'rw-card-exiting',
+        'rw-exit-up',
+        'rw-exit-down',
+        'rw-exit-active',
+        'rw-card-entering',
+        'rw-enter-from-below',
+        'rw-enter-from-above',
+        'rw-enter-active'
+    ];
     const objectUrls = new WeakMap();
     const deckIndices = { normal: 0, background: 0, error: 0 };
     const folderScrollTops = { normal: 0, background: 0, error: 0 };
@@ -39,7 +55,8 @@
     let toastTimer = null;
     let reviewIdCounter = 0;
     let initialized = false;
-    let demoMode = new URLSearchParams(location.search).get('reviewDemo') === '1';
+    let demoMode = window.YOLO_UI_PREVIEW === true
+        || new URLSearchParams(location.search).get('reviewDemo') === '1';
 
     function escapeHtml(value) {
         return String(value ?? '').replace(/[&<>'"]/g, character => ({
@@ -236,11 +253,8 @@
         root.innerHTML = `
             <div class="rw-dialog" role="dialog" aria-modal="true" aria-labelledby="rwTitle">
                 <header class="rw-topbar">
-                    <div class="rw-brand" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M15 10l5-2.4v8.8L15 14M5 6h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z"/></svg></div>
                     <div class="rw-title">
-                        <div class="rw-kicker">AI 标注完成 · 导出前检查</div>
-                        <div class="rw-title-line"><h1 id="rwTitle">标注结果复核台</h1><span class="rw-badge">实时同步 YOLO TXT</span></div>
-                        <p>滚轮机械翻页检查图片；分类和框修改会写回当前任务。</p>
+                        <h1 id="rwTitle">标注结果复核台</h1>
                     </div>
                     <div class="rw-top-actions">
                         <button class="rw-button rw-button-ghost" data-rw-action="return-main" type="button">返回主页面</button>
@@ -248,7 +262,7 @@
                     </div>
                 </header>
                 <section class="rw-summary" aria-label="复核统计">
-                    <div class="rw-summary-copy"><small>任务概览</small><strong data-rw-total>共 0 张图片</strong><span>每张导入图片都必须进入 normal、background 或 error。</span></div>
+                    <div class="rw-summary-copy"><small>任务概览</small><strong data-rw-total>共 0 张图片</strong></div>
                     <div class="rw-summary-cards">
                         ${CATEGORY_KEYS.map(category => `<div class="rw-summary-card" data-category="${category}"><span class="rw-summary-icon">${CATEGORY_META[category].symbol}</span><span><b data-rw-summary-count="${category}">0</b><small>${CATEGORY_META[category].label}</small></span></div>`).join('')}
                         <div class="rw-summary-card rw-conflicts"><span class="rw-summary-icon">◆</span><span><b data-rw-conflict-count>0</b><small>规则冲突</small></span></div>
@@ -262,7 +276,6 @@
                         <button class="rw-segment" data-rw-filter="error" type="button">异常图</button>
                     </div>
                     <label class="rw-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg><input data-rw-search type="search" placeholder="搜索文件名…" autocomplete="off"></label>
-                    <div class="rw-wheel-hint"><span class="rw-wheel-icon">↕</span><span data-rw-view-hint>鼠标停在卡片上滚动，一次翻一张并交替覆盖置顶</span></div>
                 </section>
                 <section class="rw-board">
                     ${CATEGORY_KEYS.map(category => createLaneMarkup(category)).join('')}
@@ -370,11 +383,6 @@
             renderLane(category);
         });
         root.querySelector('.rw-board').classList.toggle('rw-single-lane', activeFilter !== 'all');
-        const folderView = activeFilter !== 'all';
-        root.querySelector('.rw-wheel-icon').textContent = folderView ? '▦' : '↕';
-        root.querySelector('[data-rw-view-hint]').textContent = folderView
-            ? '文件夹视图：同屏浏览全部图片，向下滚动查看更多'
-            : '鼠标停在卡片上滚动，一次翻一张并交替覆盖置顶';
         const conflicts = results.filter(issueFor);
         const conflictCard = root.querySelector('.rw-conflicts');
         conflictCard.classList.toggle('rw-visible', conflicts.length > 0);
@@ -385,6 +393,48 @@
             ? `${conflicts.length} 张图片存在规则问题，导出时会自动放入 error`
             : '所有图片符合当前分类规则';
         root.querySelectorAll('[data-rw-action="export"]').forEach(button => button.disabled = results.length === 0);
+    }
+
+    function applyMechanicalCardState(card, index, activeIndex) {
+        card.classList.remove('rw-folder-card', ...MECHANICAL_CARD_CLASSES);
+        if (index === activeIndex) {
+            card.classList.add('rw-card-active');
+            card.setAttribute('aria-hidden', 'false');
+        } else if (index === activeIndex - 1) {
+            card.classList.add('rw-card-peek-before');
+            card.setAttribute('aria-hidden', 'true');
+        } else if (index === activeIndex + 1) {
+            card.classList.add('rw-card-peek-after');
+            card.setAttribute('aria-hidden', 'true');
+        } else {
+            card.classList.add(index < activeIndex ? 'rw-card-hidden-before' : 'rw-card-hidden-after');
+            card.setAttribute('aria-hidden', 'true');
+        }
+    }
+
+    function updateLanePager(category, results, activeIndex, folderView) {
+        root.querySelector(`[data-rw-page="${category}"]`).textContent = results.length
+            ? `${activeIndex + 1} / ${results.length}`
+            : '0 / 0';
+        root.querySelector(`[data-rw-prev="${category}"]`).disabled = activeIndex <= 0;
+        root.querySelector(`[data-rw-next="${category}"]`).disabled = activeIndex >= results.length - 1;
+        const dots = root.querySelector(`[data-rw-dots="${category}"]`);
+        dots.replaceChildren(...(folderView ? [] : results.slice(0, 12).map((result, index) => {
+            const dot = document.createElement('button');
+            dot.type = 'button';
+            dot.className = `rw-page-dot${index === activeIndex ? ' rw-active' : ''}`;
+            dot.title = fileNameFor(result);
+            dot.addEventListener('click', () => jumpLane(category, index));
+            return dot;
+        })));
+    }
+
+    function settleMechanicalDeck(category, results, activeIndex, viewport) {
+        deckIndices[category] = activeIndex;
+        Array.from(viewport.querySelectorAll('.rw-result-card')).forEach((card, index) => {
+            applyMechanicalCardState(card, index, activeIndex);
+        });
+        updateLanePager(category, results, activeIndex, false);
     }
 
     function renderLane(category) {
@@ -410,9 +460,7 @@
                     card.classList.add('rw-card-active', 'rw-folder-card');
                     card.setAttribute('aria-hidden', 'false');
                 } else {
-                    if (index === activeIndex) card.classList.add('rw-card-active');
-                    else card.classList.add(index < activeIndex ? 'rw-card-hidden-before' : 'rw-card-hidden-after');
-                    card.setAttribute('aria-hidden', index === activeIndex ? 'false' : 'true');
+                    applyMechanicalCardState(card, index, activeIndex);
                 }
                 viewport.appendChild(card);
             });
@@ -428,18 +476,7 @@
                 );
             });
         }
-        root.querySelector(`[data-rw-page="${category}"]`).textContent = results.length ? `${activeIndex + 1} / ${results.length}` : '0 / 0';
-        root.querySelector(`[data-rw-prev="${category}"]`).disabled = activeIndex <= 0;
-        root.querySelector(`[data-rw-next="${category}"]`).disabled = activeIndex >= results.length - 1;
-        const dots = root.querySelector(`[data-rw-dots="${category}"]`);
-        dots.replaceChildren(...(folderView ? [] : results.slice(0, 12).map((result, index) => {
-            const dot = document.createElement('button');
-            dot.type = 'button';
-            dot.className = `rw-page-dot${index === activeIndex ? ' rw-active' : ''}`;
-            dot.title = fileNameFor(result);
-            dot.addEventListener('click', () => jumpLane(category, index));
-            return dot;
-        })));
+        updateLanePager(category, results, activeIndex, folderView);
     }
 
     function createCard(result, category) {
@@ -506,11 +543,14 @@
         nameRow.append(name, drag, removeImage);
         const meta = document.createElement('div');
         meta.className = 'rw-card-meta';
-        const confidence = Number(result.validation?.confidence);
+        const rawConfidence = result.validation?.confidence;
+        const confidence = rawConfidence === null || rawConfidence === undefined ? NaN : Number(rawConfidence);
         const statusText = document.createElement('span');
-        statusText.textContent = result.reviewCategory === 'background'
+        statusText.textContent = result.reviewCategory === 'error' ? '状态：待人工复核'
+            : result.reviewCategory === 'background'
             ? '状态：确认无目标'
-            : Number.isFinite(confidence) ? `复核置信度：${Math.round(confidence * 100)}%` : '人工检查结果';
+            : Number.isFinite(confidence) ? `复核置信度：${Math.round(confidence * 100)}%`
+                : result.validation?.completenessChecked ? '状态：已逐类复核，训练前仍需抽查' : '状态：待人工抽查';
         const txt = yoloTextFor(result);
         const txtState = document.createElement('b');
         txtState.textContent = txt ? `${textBytes(txt)} B TXT` : '0 KB TXT';
@@ -607,16 +647,40 @@
             return;
         }
         animatingDecks.add(category);
-        currentCard.classList.add('rw-card-covered');
-        targetCard.classList.remove('rw-card-hidden-before', 'rw-card-hidden-after');
+        currentCard.classList.add(
+            'rw-card-exiting',
+            delta > 0 ? 'rw-exit-up' : 'rw-exit-down'
+        );
+        targetCard.classList.remove(
+            'rw-card-peek-before',
+            'rw-card-peek-after',
+            'rw-card-hidden-before',
+            'rw-card-hidden-after'
+        );
         targetCard.classList.add('rw-card-entering', delta > 0 ? 'rw-enter-from-below' : 'rw-enter-from-above');
         targetCard.setAttribute('aria-hidden', 'false');
-        requestAnimationFrame(() => requestAnimationFrame(() => targetCard.classList.add('rw-enter-active')));
-        setTimeout(() => {
-            deckIndices[category] = targetIndex;
+        // 先提交新旧卡的共同起点，再在同一帧启动两条 transform 过渡。
+        // 这样不会出现新页先跳、旧页延迟约 300ms 才移动的割裂感。
+        void viewport.offsetHeight;
+        requestAnimationFrame(() => {
+            currentCard.classList.add('rw-exit-active');
+            targetCard.classList.add('rw-enter-active');
+        });
+        let settled = false;
+        let fallbackTimer = null;
+        const settle = () => {
+            if (settled) return;
+            settled = true;
+            if (fallbackTimer) clearTimeout(fallbackTimer);
+            targetCard.removeEventListener('transitionend', onTransitionEnd);
+            settleMechanicalDeck(category, results, targetIndex, viewport);
             animatingDecks.delete(category);
-            renderLane(category);
-        }, FLIP_DURATION);
+        };
+        const onTransitionEnd = event => {
+            if (event.target === targetCard && event.propertyName === 'transform') settle();
+        };
+        targetCard.addEventListener('transitionend', onTransitionEnd);
+        fallbackTimer = setTimeout(settle, FLIP_DURATION + 90);
     }
 
     function jumpLane(category, targetIndex) {
@@ -989,6 +1053,11 @@
             .filter(isValidBox)
             .forEach(annotation => getClassId(annotation.label.trim())));
         const zip = new JSZip();
+        for (const category of CATEGORY_KEYS) {
+            const folder = CATEGORY_META[category].folder;
+            zip.folder(`${folder}/images`);
+            zip.folder(`${folder}/labels`);
+        }
         const manifest = {
             formatVersion: 1,
             exportedAt: new Date().toISOString(),
@@ -1057,6 +1126,11 @@
                 root.dataset.demoExport = JSON.stringify(window.ReviewWorkspace.lastDemoExport);
                 if (els?.statusMsg) els.statusMsg.textContent = '复核台演示包结构验证完成';
                 showToast(`组合测试通过：已生成 ${manifest.items.length} 张图片的分类包结构`);
+                window.showExportCompletion?.({
+                    title: '导出流程验证完成',
+                    message: `已验证 ${manifest.items.length} 张图片的 normal / background / error 分类包结构。`,
+                    note: '这是 UI 预览模式，没有写入磁盘，也不会发送 API 请求。'
+                });
                 return;
             }
             const fileName = `yolo_reviewed_dataset_${Date.now()}.zip`;
@@ -1073,10 +1147,16 @@
             if (els?.statusMsg) els.statusMsg.textContent = saved.confirmed
                 ? `分类复核任务包已保存：${saved.path}`
                 : `分类复核任务包已提交下载：${saved.path}`;
-            alert(saved.confirmed
-                ? `分类复核任务包已保存到：\n${saved.path}`
-                : `分类复核任务包已提交浏览器下载：\n${saved.path}`);
-            showToast('分类复核任务包已生成');
+            window.showExportCompletion?.({
+                title: saved.confirmed ? '分类数据集导出完成' : '分类数据集已提交下载',
+                message: saved.confirmed
+                    ? `已保存 ${manifest.items.length} 张图片及对应 YOLO TXT。`
+                    : `已生成 ${manifest.items.length} 张图片及对应 YOLO TXT，请在浏览器下载列表中确认完成。`,
+                path: saved.path,
+                confirmed: saved.confirmed,
+                note: `normal ${manifest.summary.normal} 张 · background ${manifest.summary.background} 张 · error ${manifest.summary.error} 张；error 原图未丢弃。`
+            });
+            showToast(saved.confirmed ? '分类数据集已保存' : '分类数据集已提交下载');
         } catch (error) {
             console.error('Reviewed package export failed', error);
             if (els?.statusMsg) els.statusMsg.textContent = `分类复核任务包导出失败：${error.message}`;

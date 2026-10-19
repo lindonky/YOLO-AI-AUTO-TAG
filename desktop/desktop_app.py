@@ -58,6 +58,23 @@ class DesktopApi:
                 "message": f"打开保存窗口失败：{type(exc).__name__}: {exc}",
             }
 
+    def open_last_export_location(self) -> dict:
+        """Open the folder of the most recently completed export.
+
+        The web layer does not provide an arbitrary local path here.  Only a
+        path recorded by the loopback server after an atomic successful write
+        can be opened.
+        """
+        try:
+            target = self.server.last_completed_export()
+            if target is None or not target.is_file():
+                return {"ok": False, "message": "尚未找到已成功保存的任务包"}
+            os.startfile(str(target.parent))
+            return {"ok": True, "path": str(target), "folder": str(target.parent)}
+        except Exception as exc:
+            logging.exception("Failed to open last export location")
+            return {"ok": False, "message": f"打开保存位置失败：{type(exc).__name__}: {exc}"}
+
 
 def resource_root() -> Path:
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
@@ -114,6 +131,8 @@ def webview2_version() -> str:
 
 
 def main() -> int:
+    if len(sys.argv) == 3 and sys.argv[1] in {'--self-test', '--self-test-ui'}:
+        return run_self_test(Path(sys.argv[2]), with_ui=sys.argv[1] == '--self-test-ui')
     setup_logging()
     logging.info("Starting %s %s", APP_NAME, APP_VERSION)
     mutex = acquire_single_instance_mutex()
@@ -154,9 +173,9 @@ def main() -> int:
             WINDOW_TITLE,
             url=url,
             js_api=DesktopApi(server),
-            width=1440,
-            height=920,
-            min_size=(1080, 700),
+            width=1280,
+            height=820,
+            min_size=(1080, 680),
             confirm_close=False,
             text_select=True,
         )
@@ -180,6 +199,72 @@ def main() -> int:
             except Exception:
                 logging.exception("Failed to stop loopback server cleanly")
         ctypes.windll.kernel32.CloseHandle(mutex)
+
+
+def run_self_test(output: Path, with_ui: bool = False) -> int:
+    """Offline packaged-runtime check; no user settings, API calls or GUI changes."""
+    import json
+    import tempfile
+    from urllib.request import urlopen
+    result = {"version": APP_VERSION, "ok": False}
+    server = None
+    try:
+        import _ctypes, _lzma, _bz2, _decimal, pyexpat
+        from webview.platforms import winforms
+        result['runtime_imports'] = True
+        result['windows_backend_import'] = True
+        result['webview2_detected'] = bool(webview2_version())
+        with tempfile.TemporaryDirectory(prefix='autotag-runtime-check-') as temp:
+            server = create_server(resource_root() / 'web', SettingsStore(Path(temp) / 'settings.json'))
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            base = f'http://127.0.0.1:{server.server_address[1]}'
+            for name in ['index.html', 'annotation_core.js', 'main.js', 'desktop_config.js']:
+                with urlopen(base + '/' + name, timeout=5) as response:
+                    if response.status != 200 or not response.read():
+                        raise RuntimeError('Missing packaged asset: ' + name)
+            with urlopen(base + '/api/health', timeout=5) as response:
+                health = json.loads(response.read())
+                if not health['ok'] or health['configured']:
+                    raise RuntimeError('Isolated loopback health check failed')
+            if with_ui:
+                import time
+                ui_errors = []
+                window = webview.create_window(
+                    'YOLO Auto-Tag runtime check', base + '/index.html',
+                    js_api=DesktopApi(server), hidden=True, width=1280, height=820,
+                )
+                def inspect_window():
+                    try:
+                        if not window.events.loaded.wait(30):
+                            raise RuntimeError('WebView2 page load timed out')
+                        for _ in range(40):
+                            if window.evaluate_js('Boolean(window.AnnotationCore && window.AppConfigManager && window.AppConfigManager.ready)'):
+                                break
+                            time.sleep(0.1)
+                        else:
+                            raise RuntimeError('Packaged application scripts did not initialize')
+                        if not window.evaluate_js("Boolean(document.getElementById('teachingLabelSelect') && document.getElementById('verifyDetections') && window.pywebview.api.choose_task_export_path)"):
+                            raise RuntimeError('Packaged controls or native export bridge missing')
+                        result['webview2_page_initialized'] = True
+                    except Exception as exc:
+                        ui_errors.append(str(exc))
+                    finally:
+                        window.destroy()
+                webview.start(inspect_window, gui='edgechromium', private_mode=True, storage_path=str(Path(temp) / 'webview'))
+                if ui_errors:
+                    raise RuntimeError(ui_errors[0])
+            server.shutdown(); server.server_close(); server = None
+            thread.join(timeout=5)
+        result['packaged_assets'] = True
+        result['ok'] = True
+    except Exception as exc:
+        result['error'] = type(exc).__name__ + ': ' + str(exc)
+    finally:
+        if server is not None:
+            server.shutdown(); server.server_close()
+        output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
+    return 0 if result['ok'] else 1
 
 
 if __name__ == "__main__":

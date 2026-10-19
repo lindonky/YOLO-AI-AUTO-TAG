@@ -28,3 +28,10 @@ settings.json
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Local handoff notes, experiments and user datasets
+HANDOFF.md
+work/
+outputs/
+datasets/
+runs/

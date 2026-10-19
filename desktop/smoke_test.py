@@ -136,6 +136,7 @@ def main() -> None:
                 assert export_response.status == 200 and export_result["ok"]
                 assert export_result["path"] == str(export_target)
                 assert export_target.read_bytes() == export_payload
+                assert server.last_completed_export() == export_target
             finally:
                 export_connection.close()
 
@@ -148,6 +149,8 @@ def main() -> None:
             assert 'id="reviewResultsBtn"' in index_text
             assert 'review_workspace.js' in index_text
             assert 'review_workspace.css' in index_text
+            assert 'desktop_ui.css' in index_text
+            assert "20260803-glass-v3b" in index_text
             task_manager_text = (web_root / "task_manager.js").read_text(encoding="utf-8")
             assert "choose_task_export_path" in task_manager_text
             assert "/api/task-export/" in task_manager_text
@@ -156,9 +159,47 @@ def main() -> None:
             main_text = (web_root / "main.js").read_text(encoding="utf-8")
             assert "AppConfigManager.testConnection" in main_text
             assert "图片处理未完成" in main_text
+            assert "app-settings-open" in main_text
+            assert "aria-expanded" in main_text
+            assert "showExportCompletion" in main_text
+            assert "open_last_export_location" in main_text
+            assert main_text.count("async function batchExtractFrames") == 1
+            assert "lastProcessedFrameIndex" in main_text
+            assert "recordVideoProcessingError" in main_text
+            assert "saveGeneratedZip" in main_text
+            assert "videos_without_annotations" in main_text
+            assert "state.annotations = Array.isArray(result?.annotations)" in main_text
+            assert "async function analyzeVideo(" not in main_text
+            assert "run().catch(fail)" in main_text
+            assert "cancelAnimationFrame(animationFrameId)" in main_text
+            assert "video.removeAttribute('src')" in main_text
+            assert main_text.index("await video.play();") < main_text.index("recorder.start();", main_text.index("await video.play();"))
+            review_text = (web_root / "review_workspace.js").read_text(encoding="utf-8")
+            assert "rw-card-peek-before" in review_text
+            assert "rw-card-peek-after" in review_text
+            assert "rw-card-exiting" in review_text
+            assert "rw-exit-active" in review_text
+            assert "AI 标注完成 · 导出前检查" not in review_text
+            assert "实时同步 YOLO TXT" not in review_text
+            assert "每张导入图片都必须进入" not in review_text
+            assert "鼠标停在卡片上滚动" not in review_text
+            review_css = (web_root / "review_workspace.css").read_text(encoding="utf-8")
+            assert ".rw-result-card.rw-card-peek-before" in review_css
+            assert ".rw-result-card.rw-card-peek-after" in review_css
+            assert ".rw-result-card.rw-card-exiting" in review_css
+            assert "translateY(-50%)" in review_css
+            desktop_css = (web_root / "desktop_ui.css").read_text(encoding="utf-8")
+            assert ".app-commandbar" in desktop_css
+            assert ".app-settings-inspector" in desktop_css
+            assert ".app-export-completion" in desktop_css
+            assert ".rw-dialog" in desktop_css
+            assert "#4285f4" not in desktop_css
+            assert "#0f6cbd" not in desktop_css
+            assert "backdrop-filter: blur(16px)" in desktop_css
             assert (web_root / "app_icon.png").is_file()
             assert (web_root / "review_workspace.js").is_file()
             assert (web_root / "review_workspace.css").is_file()
+            assert (web_root / "desktop_ui.css").is_file()
             assert FAKE_KEY not in index_text
         finally:
             server.shutdown()

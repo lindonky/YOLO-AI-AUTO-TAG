@@ -73,10 +73,10 @@ def upstream_error_message(status: int, body: bytes) -> str:
         detail = str(error_data.get("error", {}).get("message") or error_data.get("message") or "")
     except (json.JSONDecodeError, AttributeError):
         detail = body.decode("utf-8", errors="replace")
-    if status == 405:
+    if status in {404, 405}:
         return (
-            "中转站拒绝了当前接口路径（HTTP 405）。如果你填写的是中转站首页，"
-            "请改用完整聊天接口；通常以 /v1/chat/completions 结尾。"
+            f"中转站未找到接口或当前模型（HTTP {status}）。请检查完整 /v1/chat/completions 地址，"
+            "并核对模型名是否仍可用；模型列表中出现不代表实际调用一定可用。"
         )
     if status == 403 and "all available accounts exhausted" in detail.lower():
         return (
@@ -92,6 +92,25 @@ def upstream_error_message(status: int, body: bytes) -> str:
     return f"上游返回 HTTP {status}：{detail[:300]}"
 
 
+def validate_chat_response(body: bytes) -> dict:
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("接口返回了网页或非 JSON 内容，请检查完整的 /v1/chat/completions 地址") from exc
+    try:
+        choice = data["choices"][0]
+        content = choice["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ValueError("接口响应缺少 choices[0].message.content，请检查 Chat Completions 接口") from exc
+    if isinstance(content, list):
+        content = "\n".join(str(part.get("text", "")) for part in content if isinstance(part, dict))
+    if not isinstance(content, str) or not content.strip():
+        raise ValueError("模型返回内容为空，请检查模型可用性与账户额度")
+    if choice.get("finish_reason") in {"length", "content_filter"}:
+        raise ValueError("模型响应被截断或拦截，不能确认调用完成")
+    return data
+
+
 class DesktopServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -100,6 +119,7 @@ class DesktopServer(ThreadingHTTPServer):
         self.settings_store = settings_store
         self._export_targets: dict[str, tuple[Path, float]] = {}
         self._export_targets_lock = threading.Lock()
+        self._last_completed_export: Path | None = None
 
     def register_export_target(self, target: Path) -> tuple[str, Path]:
         path = Path(target).expanduser()
@@ -123,6 +143,14 @@ class DesktopServer(ThreadingHTTPServer):
         if value is None or value[1] <= now:
             return None
         return value[0]
+
+    def record_completed_export(self, target: Path) -> None:
+        with self._export_targets_lock:
+            self._last_completed_export = Path(target)
+
+    def last_completed_export(self) -> Path | None:
+        with self._export_targets_lock:
+            return self._last_completed_export
 
     def handle_error(self, request, client_address) -> None:
         _exc_type, exc, _traceback = sys.exc_info()
@@ -266,18 +294,22 @@ class DesktopHandler(SimpleHTTPRequestHandler):
             {
                 "model": runtime["model"],
                 "messages": [{"role": "user", "content": "Reply with [] only."}],
+                "stream": False,
             },
             ensure_ascii=False,
         ).encode("utf-8")
         try:
             status, _content_type, body = request_upstream(payload, runtime, timeout=60)
             if 200 <= status < 300:
-                self.send_json(200, {"ok": True, "message": "URL、Key、模型和网络连接测试成功"})
+                validate_chat_response(body)
+                self.send_json(200, {"ok": True, "message": "聊天接口与模型响应测试成功；图片能力将在首次识别时验证"})
                 return
             self.send_json(
                 502,
                 {"ok": False, "message": upstream_error_message(status, body)},
             )
+        except ValueError as exc:
+            self.send_json(502, {"ok": False, "message": str(exc)})
         except URLError as exc:
             self.send_json(502, {"ok": False, "message": f"连接失败：{exc.reason}"})
         except Exception as exc:
@@ -292,6 +324,7 @@ class DesktopHandler(SimpleHTTPRequestHandler):
             request_data = self.read_json(MAX_API_BODY_BYTES)
             # The installed user's saved model is authoritative.
             request_data["model"] = runtime["model"]
+            request_data["stream"] = False
             payload = json.dumps(request_data, ensure_ascii=False).encode("utf-8")
             status, content_type, response_body = request_upstream(payload, runtime)
             self.send_bytes(status, content_type, response_body)
@@ -338,6 +371,7 @@ class DesktopHandler(SimpleHTTPRequestHandler):
                 output.flush()
                 os.fsync(output.fileno())
             os.replace(temporary, target)
+            self.server.record_completed_export(target)
             self.send_json(
                 200,
                 {"ok": True, "path": str(target), "bytes": content_length},

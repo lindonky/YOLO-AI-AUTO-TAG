@@ -103,7 +103,9 @@ const TaskManager = {
     stop() {
         if (confirm('确定要结束当前任务吗？结束后的数据可以正常导出。')) {
             this.isStopped = true;
-            this.resume(); // 恢复以跳出循环
+            this.isPaused = false;
+            this.updateUIState('running');
+            els.statusMsg.textContent = '正在安全结束任务，已完成的数据会保留...';
         }
     },
 
@@ -119,7 +121,6 @@ const TaskManager = {
             // 确保按钮可用
             startBtn.disabled = false;
             startBtn.classList.remove('bg-gray-400', 'cursor-not-allowed');
-            startBtn.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
         } else if (state === 'running') {
             startBtn.classList.add('hidden');
             taskControls.classList.remove('hidden');
@@ -341,6 +342,7 @@ const TaskManager = {
                 model: els.modelSelect.value,
                 prompt: els.promptInput.value,
                 classLabel: els.classLabelInput.value, // 保存类别名
+                verifyDetections: els.verifyDetections?.checked !== false,
                 scaleFactor: els.scaleFactor.value,
                 apiRpm: els.apiRpm.value,
                 parallelCount: els.parallelCountGlobal.value,
@@ -386,10 +388,22 @@ const TaskManager = {
                 completed = true;
                 if (saved.confirmed) {
                     els.statusMsg.textContent = `任务包已保存：${saved.path}`;
-                    alert(`任务包已保存到：\n${saved.path}`);
+                    window.showExportCompletion?.({
+                        title: '任务包导出完成',
+                        message: '任务源文件、当前识别结果和配置已经保存，可稍后重新导入继续处理。',
+                        path: saved.path,
+                        confirmed: true,
+                        note: '建议保留这个可恢复任务包，分类训练数据请在复核台完成检查后另行导出。'
+                    });
                 } else {
                     els.statusMsg.textContent = `任务包已提交到浏览器下载：${saved.path}`;
-                    alert(`当前浏览器不支持选择完整保存路径。\n任务包已提交到浏览器下载，请在下载列表或默认“下载”文件夹中查找：\n${saved.path}`);
+                    window.showExportCompletion?.({
+                        title: '任务包已提交下载',
+                        message: '当前浏览器没有返回完整磁盘路径，请在下载列表或默认“下载”文件夹中查找。',
+                        path: saved.path,
+                        confirmed: false,
+                        note: '文件名已经显示在上方；浏览器下载完成后再关闭当前任务。'
+                    });
                 }
             }
             return true;
@@ -414,14 +428,20 @@ const TaskManager = {
 
             // 1. 恢复模式
             if ((taskConfig.mode === 'video' && !state.isVideoMode) || (taskConfig.mode === 'image' && state.isVideoMode)) {
-                els.modeToggle.checked = (taskConfig.mode === 'video');
-                els.modeToggle.dispatchEvent(new Event('change'));
+                state.modeSwitchReason = 'task-import';
+                try {
+                    els.modeToggle.checked = (taskConfig.mode === 'video');
+                    els.modeToggle.dispatchEvent(new Event('change'));
+                } finally {
+                    state.modeSwitchReason = '';
+                }
             }
             
             // 2. 恢复通用UI设置
             els.modelSelect.value = taskConfig.model || els.modelSelect.value;
             els.promptInput.value = taskConfig.prompt || '';
             if (els.classLabelInput) els.classLabelInput.value = taskConfig.classLabel || ''; // 恢复类别名
+            if (els.verifyDetections) els.verifyDetections.checked = taskConfig.verifyDetections !== false;
             if (taskConfig.scaleFactor) els.scaleFactor.value = taskConfig.scaleFactor;
             if (taskConfig.parallelCount) els.parallelCountGlobal.value = taskConfig.parallelCount;
             state.teachingExamples = Array.isArray(taskConfig.teachingExamples)
@@ -510,8 +530,12 @@ const TaskManager = {
 
             // 7. 自动开始/继续
             if (confirm(`导入成功！共 ${restoredFiles.length} 个文件。\n是否立即恢复现场并继续执行？\n(视频任务将根据保存的FPS自动重新定位，数据不会丢失)`)) {
-                // 调用 main.js 的 startAnalysis，它会自动判断是抽帧还是分析
-                window.startAnalysis(); 
+                // 视频模式是“抽帧→识别”两阶段；选择继续时应自动跑完整链条，
+                // 不能只完成抽帧后又要求用户猜测还要再点一次。
+                await window.startAnalysis();
+                if (taskConfig.mode === 'video' && state.videoAnalysisReady) {
+                    await window.startAnalysis();
+                }
             }
 
         } catch (e) {

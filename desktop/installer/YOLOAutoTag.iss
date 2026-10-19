@@ -1,6 +1,6 @@
 #define MyAppName "YOLO Auto-Tag"
-#define MyAppVersion "1.0"
-#define MyAppVersionLabel "V1.0"
+#define MyAppVersion "1.1"
+#define MyAppVersionLabel "V1.1"
 #define MyAppPublisher "粥沫鱼块"
 #define MyAppContact "2093880845@qq.com"
 #define MyAppURL "https://github.com/lindonky/YOLO-AI-AUTO-TAG"
@@ -21,7 +21,7 @@ PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\output
-OutputBaseFilename=YOLO_Auto_Tag_V1.0_Setup
+OutputBaseFilename=YOLO_Auto_Tag_V1.1_Setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -37,11 +37,11 @@ UninstallDisplayName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 SetupIconFile=..\assets\app_icon.ico
 InfoBeforeFile=安装前说明.txt
-VersionInfoVersion=1.0.0.0
+VersionInfoVersion=1.1.0.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName} 安装程序
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion=1.0.0.0
+VersionInfoProductVersion=1.1.0.0
 VersionInfoCopyright=作者：{#MyAppPublisher}
 
 [Languages]

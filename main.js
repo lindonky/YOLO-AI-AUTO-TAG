@@ -14,6 +14,8 @@ const els = {
     teachingModeBtn: $('teachingModeBtn'), saveTeachingExampleBtn: $('saveTeachingExampleBtn'),
     undoTeachingBoxBtn: $('undoTeachingBoxBtn'), clearTeachingExamplesBtn: $('clearTeachingExamplesBtn'),
     teachingStatus: $('teachingStatus'), teachingHint: $('teachingHint'),
+    teachingLabelSelect: $('teachingLabelSelect'), teachingFloatingLabelSelect: $('teachingFloatingLabelSelect'),
+    verifyDetections: $('verifyDetections'),
     quickTeachingBtn: $('quickTeachingBtn'), quickTeachingText: $('quickTeachingText'), quickTeachingCount: $('quickTeachingCount'),
     teachingFloatingToolbar: $('teachingFloatingToolbar'), teachingFloatingStatus: $('teachingFloatingStatus'),
     saveTeachingFloatingBtn: $('saveTeachingFloatingBtn'), undoTeachingFloatingBtn: $('undoTeachingFloatingBtn'), exitTeachingFloatingBtn: $('exitTeachingFloatingBtn'),
@@ -69,13 +71,18 @@ const PanelManager = {
 
                 if (willShow) {
                     panel.classList.remove('hidden');
+                    btn.setAttribute('aria-pressed', 'true');
                     this.bringToFront(panel);
                     // 互斥：关闭另一个
                     if (other && !other.classList.contains('hidden')) {
                         other.classList.add('hidden');
+                        const otherButton = document.querySelector(`[aria-controls="${otherPanelId}"]`)
+                            || $(otherPanelId === 'cropPreview' ? 'cropPreviewBtn' : 'timelineResultsBtn');
+                        otherButton?.setAttribute('aria-pressed', 'false');
                     }
                 } else {
                     panel.classList.add('hidden');
+                    btn.setAttribute('aria-pressed', 'false');
                 }
             });
         }
@@ -94,7 +101,8 @@ const ThemeManager = {
         const moon = $('themeIconMoon');
         if (!btn || !sun || !moon) return;
 
-        const isDark = localStorage.getItem('theme') === 'dark';
+        // 深色是桌面版默认主题；只有用户明确保存 light 时才切回浅色。
+        const isDark = window.YOLO_UI_PREVIEW === true || localStorage.getItem('theme') !== 'light';
         if (isDark) {
             document.documentElement.classList.add('dark');
             sun.classList.remove('hidden');
@@ -121,21 +129,145 @@ const ThemeManager = {
     }
 };
 
-// 通用下拉菜单切换函数
-window.toggleDropdown = function(id) {
-    const el = document.getElementById(id);
-    if (!el) return;
+// 统一的导出完成收尾：准确路径、复制路径、打开目录和返回工作区。
+const ExportCompletion = {
+    root: null,
+    lastFocused: null,
 
-    // 打开前先关闭其他所有弹出的菜单，避免重叠
-    const allMenus = ['fileMenu', 'settingsMenu'];
-    allMenus.forEach(menuId => {
-        if (menuId !== id) {
-            const other = document.getElementById(menuId);
-            if (other) other.classList.add('hidden');
+    ensure() {
+        if (this.root) return this.root;
+        const root = document.createElement('section');
+        root.id = 'exportCompletion';
+        root.className = 'app-export-completion hidden';
+        root.setAttribute('aria-hidden', 'true');
+        root.innerHTML = `
+            <div class="app-export-card" role="dialog" aria-modal="true" aria-labelledby="exportCompletionTitle">
+                <header class="app-export-head">
+                    <span class="app-export-check" aria-hidden="true">✓</span>
+                    <div><small>任务流程已完成</small><h2 id="exportCompletionTitle">导出完成</h2></div>
+                </header>
+                <div class="app-export-body">
+                    <p data-export-message>文件已经保存。</p>
+                    <label>保存位置</label>
+                    <div class="app-export-path-row"><code data-export-path>—</code><button data-export-copy type="button">复制路径</button></div>
+                    <p class="app-export-note" data-export-note></p>
+                </div>
+                <footer class="app-export-actions">
+                    <span data-export-status role="status" aria-live="polite"></span>
+                    <button data-export-close type="button">返回工作区</button>
+                    <button class="app-export-open" data-export-open type="button">打开保存位置</button>
+                </footer>
+            </div>`;
+        document.body.appendChild(root);
+        this.root = root;
+        root.querySelector('[data-export-close]').addEventListener('click', () => this.close());
+        root.querySelector('[data-export-copy]').addEventListener('click', () => this.copyPath());
+        root.querySelector('[data-export-open]').addEventListener('click', () => this.openLocation());
+        root.addEventListener('click', event => {
+            if (event.target === root) this.close();
+        });
+        return root;
+    },
+
+    show({ title = '导出完成', message = '文件已经保存。', path = '', note = '', confirmed = false } = {}) {
+        const root = this.ensure();
+        this.lastFocused = document.activeElement;
+        root.querySelector('#exportCompletionTitle').textContent = title;
+        root.querySelector('[data-export-message]').textContent = message;
+        root.querySelector('[data-export-path]').textContent = path || '演示模式未写入磁盘';
+        root.querySelector('[data-export-note]').textContent = note;
+        root.querySelector('[data-export-status]').textContent = '';
+        root.querySelector('[data-export-copy]').hidden = !path;
+        const canOpen = confirmed && Boolean(window.pywebview?.api?.open_last_export_location);
+        root.querySelector('[data-export-open]').hidden = !canOpen;
+        root.classList.remove('hidden');
+        root.setAttribute('aria-hidden', 'false');
+        root.querySelector(canOpen ? '[data-export-open]' : '[data-export-close]').focus();
+    },
+
+    close() {
+        if (!this.root) return;
+        this.root.classList.add('hidden');
+        this.root.setAttribute('aria-hidden', 'true');
+        this.lastFocused?.focus?.();
+    },
+
+    async copyPath() {
+        const path = this.root?.querySelector('[data-export-path]')?.textContent || '';
+        const status = this.root?.querySelector('[data-export-status]');
+        try {
+            await navigator.clipboard.writeText(path);
+            if (status) status.textContent = '路径已复制';
+        } catch (_error) {
+            if (status) status.textContent = '复制失败，请手动选择路径文字';
         }
-    });
+    },
 
-    el.classList.toggle('hidden');
+    async openLocation() {
+        const status = this.root?.querySelector('[data-export-status]');
+        try {
+            const result = await window.pywebview?.api?.open_last_export_location?.();
+            if (!result?.ok) throw new Error(result?.message || '无法打开保存位置');
+            if (status) status.textContent = `已打开：${result.folder}`;
+        } catch (error) {
+            if (status) status.textContent = String(error?.message || error || '无法打开保存位置');
+        }
+    }
+};
+
+window.showExportCompletion = options => ExportCompletion.show(options);
+
+document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && ExportCompletion.root && !ExportCompletion.root.classList.contains('hidden')) {
+        event.preventDefault();
+        ExportCompletion.close();
+    }
+});
+
+// 桌面命令栏菜单：互斥、键盘导航、焦点返回和 aria 状态保持一致。
+const DROPDOWNS = {
+    fileMenu: { buttonId: 'fileBtn', bodyClass: 'app-file-menu-open' },
+    settingsMenu: { buttonId: 'settingsBtn', bodyClass: 'app-settings-open' }
+};
+let openDropdownId = '';
+
+function dropdownItems(menu) {
+    const selector = menu.id === 'settingsMenu'
+        ? 'button:not(:disabled), input:not(:disabled):not([type="hidden"]):not([type="file"]), select:not(:disabled)'
+        : 'button:not(:disabled), label:not([aria-disabled="true"])';
+    return Array.from(menu.querySelectorAll(selector))
+        .filter(item => !item.classList.contains('hidden') && item.offsetParent !== null);
+}
+
+function setDropdownOpen(menuId, open, options = {}) {
+    const config = DROPDOWNS[menuId];
+    const menu = document.getElementById(menuId);
+    const button = config ? document.getElementById(config.buttonId) : null;
+    if (!config || !menu) return;
+    menu.classList.toggle('hidden', !open);
+    button?.setAttribute('aria-expanded', String(open));
+    document.body.classList.toggle(config.bodyClass, open);
+    if (open) {
+        openDropdownId = menuId;
+        if (options.focusFirst) dropdownItems(menu)[0]?.focus();
+    } else if (openDropdownId === menuId) {
+        openDropdownId = '';
+        if (options.restoreFocus) button?.focus();
+    }
+}
+
+function closeDropdowns(exceptId = '', options = {}) {
+    Object.keys(DROPDOWNS).forEach(menuId => {
+        if (menuId !== exceptId) setDropdownOpen(menuId, false, options);
+    });
+}
+
+window.toggleDropdown = function(id, options = {}) {
+    const menu = document.getElementById(id);
+    if (!menu || !DROPDOWNS[id]) return;
+    const willOpen = menu.classList.contains('hidden');
+    closeDropdowns(id);
+    setDropdownOpen(id, willOpen, options);
 };
 
 // 兼容旧调用
@@ -155,9 +287,68 @@ document.addEventListener('click', function(e) {
         if (menu && !menu.classList.contains('hidden')) {
             // 如果点击的既不是按钮，也不是菜单内部，则关闭
             if (btn && !btn.contains(e.target) && !menu.contains(e.target)) {
-                menu.classList.add('hidden');
+                setDropdownOpen(menuId, false);
             }
         }
+    });
+});
+
+document.getElementById('fileMenu')?.addEventListener('click', event => {
+    if (event.target.closest('button, label')) setDropdownOpen('fileMenu', false);
+});
+
+Object.entries(DROPDOWNS).forEach(([menuId, config]) => {
+    const button = document.getElementById(config.buttonId);
+    const menu = document.getElementById(menuId);
+    if (!button || !menu) return;
+    if (menuId === 'fileMenu') {
+        menu.querySelectorAll('button:not(:disabled), label:not([aria-disabled="true"])').forEach(item => {
+            item.setAttribute('tabindex', '-1');
+            item.setAttribute('role', 'menuitem');
+        });
+    }
+    button.addEventListener('keydown', event => {
+        if (event.key !== 'ArrowDown' && event.key !== 'Enter' && event.key !== ' ') return;
+        if ((event.key === 'Enter' || event.key === ' ') && !menu.classList.contains('hidden')) return;
+        event.preventDefault();
+        closeDropdowns(menuId);
+        setDropdownOpen(menuId, true, { focusFirst: true });
+    });
+    if (menuId !== 'fileMenu') return;
+    menu.addEventListener('keydown', event => {
+        if ((event.key === 'Enter' || event.key === ' ') && document.activeElement?.tagName === 'LABEL') {
+            event.preventDefault();
+            document.activeElement.click();
+            return;
+        }
+        if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+        const items = dropdownItems(menu);
+        if (!items.length) return;
+        event.preventDefault();
+        const currentIndex = items.indexOf(document.activeElement);
+        let targetIndex = currentIndex;
+        if (event.key === 'Home') targetIndex = 0;
+        if (event.key === 'End') targetIndex = items.length - 1;
+        if (event.key === 'ArrowDown') targetIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % items.length;
+        if (event.key === 'ArrowUp') targetIndex = currentIndex < 0 ? items.length - 1 : (currentIndex - 1 + items.length) % items.length;
+        items[targetIndex]?.focus();
+    });
+});
+
+document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    if (openDropdownId) {
+        const closingId = openDropdownId;
+        event.preventDefault();
+        setDropdownOpen(closingId, false, { restoreFocus: true });
+        return;
+    }
+    PanelManager.panels.forEach(panelId => {
+        const panel = $(panelId);
+        if (!panel || panel.classList.contains('hidden')) return;
+        panel.classList.add('hidden');
+        const button = $(panelId === 'cropPreview' ? 'cropPreviewBtn' : 'timelineResultsBtn');
+        button?.setAttribute('aria-pressed', 'false');
     });
 });
 // 状态变量
@@ -180,9 +371,12 @@ let state = {
     videoFrameCbHandle: null,
     videoFramesCache: new Map(), // key: filename, value: { frames, fps }
     videoAnalysisReady: false,   // true 表示抽帧完成，按钮变成"开始分析"
+    videoObjectUrl: '',
+    modeSwitchReason: '',
     currentFileIndex: -1,
     viewRequestId: 0,
     teachingMode: false,
+    teachingLabel: '',
     teachingDragStart: null,
     teachingDraftBox: null,
     teachingDraftBoxes: [],
@@ -259,6 +453,13 @@ if (els.saveTeachingExampleBtn) els.saveTeachingExampleBtn.addEventListener('cli
 if (els.undoTeachingBoxBtn) els.undoTeachingBoxBtn.addEventListener('click', undoTeachingBox);
 if (els.clearTeachingExamplesBtn) els.clearTeachingExamplesBtn.addEventListener('click', clearTeachingExamples);
 if (els.quickTeachingBtn) els.quickTeachingBtn.addEventListener('click', () => setTeachingMode(!state.teachingMode));
+for (const select of [els.teachingLabelSelect, els.teachingFloatingLabelSelect]) {
+    select?.addEventListener('change', () => {
+        state.teachingLabel = select.value;
+        syncTeachingLabelControls();
+    });
+}
+els.classLabelInput.addEventListener('input', () => updateTeachingStatus());
 if (els.saveTeachingFloatingBtn) els.saveTeachingFloatingBtn.addEventListener('click', () => saveTeachingExample(true));
 if (els.undoTeachingFloatingBtn) els.undoTeachingFloatingBtn.addEventListener('click', undoTeachingBox);
 if (els.exitTeachingFloatingBtn) els.exitTeachingFloatingBtn.addEventListener('click', () => setTeachingMode(false));
@@ -323,10 +524,27 @@ els.manualFrame.addEventListener('change', () => {
 });
 
 function toggleMode() {
-    state.isVideoMode = els.modeToggle.checked;
+    const requestedVideoMode = els.modeToggle.checked;
+    const modeChanged = requestedVideoMode !== state.isVideoMode;
+    const hasCurrentWork = state.files.length > 0 || state.imageResults.length > 0 || state.videoResults.length > 0;
+    if (modeChanged && hasCurrentWork && state.modeSwitchReason !== 'task-import') {
+        const nextLabel = requestedVideoMode ? '视频模式' : '图片模式';
+        if (!confirm(`切换到${nextLabel}会清空当前任务的文件和结果。\n\n如需保留，请先导出可恢复任务包。是否继续？`)) {
+            els.modeToggle.checked = state.isVideoMode;
+            return;
+        }
+    }
+    state.isVideoMode = requestedVideoMode;
     if (state.isVideoMode && state.teachingMode) setTeachingMode(false);
     if (els.quickTeachingBtn) els.quickTeachingBtn.classList.toggle('hidden', state.isVideoMode);
     els.modeLabel.textContent = state.isVideoMode ? '当前: 视频模式' : '当前: 图片模式';
+    const brandGlyph = $('appBrandGlyph');
+    if (brandGlyph) {
+        brandGlyph.setAttribute('aria-label', state.isVideoMode ? '视频模式' : '图片模式');
+        brandGlyph.innerHTML = state.isVideoMode
+            ? '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l5-2.5v9L15 14M5 6h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z"/></svg>'
+            : '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 17l4.5-4.5 3 3L15 12l5 5M6 20h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Zm9-11h.01"/></svg>';
+    }
     els.fileInput.accept = state.isVideoMode ? 'video/*' : 'image/*';
     els.videoOptions.classList.toggle('hidden', !state.isVideoMode);
 
@@ -367,16 +585,21 @@ function toggleMode() {
         els.btnText.textContent = "开始分析";
     }
 
-    state.annotations = [];
-    state.files = [];
-    state.imageResults = [];
-    state.videoResults = [];
-    state.videoFramesCache.clear(); // 清空缓存
-    renderFileList(); 
-    els.statusMsg.textContent = '模式已切换';
+    if (modeChanged) {
+        state.annotations = [];
+        state.files = [];
+        state.imageResults = [];
+        state.videoResults = [];
+        state.videoFramesCache.clear();
+        state.videoAnalysisReady = false;
+        renderFileList();
+        els.statusMsg.textContent = '模式已切换';
+    }
 
     if (!state.isVideoMode) {
         try { els.videoPlayer.pause(); } catch {}
+        if (state.videoObjectUrl) URL.revokeObjectURL(state.videoObjectUrl);
+        state.videoObjectUrl = '';
         els.videoPlayer.removeAttribute('src');
         els.videoPlayer.load();
         state.videoRect = null;
@@ -517,8 +740,17 @@ function switchFile(index) {
     }
 
     if (state.isVideoMode) {
-        els.videoPlayer.src = URL.createObjectURL(selectedFile);
+        if (state.videoObjectUrl) URL.revokeObjectURL(state.videoObjectUrl);
+        state.videoObjectUrl = URL.createObjectURL(selectedFile);
+        els.videoPlayer.src = state.videoObjectUrl;
         els.videoPlayer.pause();
+        const result = state.videoResults.find(item =>
+            item.file === selectedFile || item.fileName === selectedFile.name
+        );
+        state.annotations = Array.isArray(result?.annotations)
+            ? JSON.parse(JSON.stringify(result.annotations))
+            : [];
+        renderTimeline(state.annotations);
         els.videoPlayer.onloadedmetadata = () => {
             if (viewRequestId !== state.viewRequestId || state.file !== selectedFile) return;
             updateVideoLayout();
@@ -703,6 +935,21 @@ els.statusMsg.textContent = `已加载 ${state.unifiedClassMap.size} 个自定�
     reader.readAsText(file);
 }
 
+function getRequestedClassNames() {
+    const manual = [...new Set((els.classLabelInput.value || '').trim().split(/\s+/).filter(Boolean))];
+    return manual.length ? manual : (state.customClassesLoaded ? getAllClasses().filter(Boolean) : []);
+}
+
+function buildTaskClassInstruction(fallbackLabel) {
+    const labels = getRequestedClassNames();
+    if (labels.length) {
+        labels.forEach(label => getClassId(label));
+        return `\n本任务全部类别(ID:名称): [${labels.map(label => `${getClassId(label)}:${label}`).join(',')}]。` +
+            '逐类检查；label 必须严格匹配其中一个名称。某类没有出现时不要补造目标。';
+    }
+    return `\nOutput Label MUST be: "${fallbackLabel}"`;
+}
+
 function getClassId(label) {
     if (!state.unifiedClassMap.has(label)) {
         state.unifiedClassMap.set(label, state.nextClassId++);
@@ -760,15 +1007,19 @@ async function startAnalysis() {
             await window.AppConfigManager.testConnection();
         } catch (error) {
             const message = String(error?.message || error || '连接测试失败');
-            if (!state.isVideoMode) {
-                const files = state.files && state.files.length ? state.files : (state.file ? [state.file] : []);
+            const files = state.files && state.files.length ? state.files : (state.file ? [state.file] : []);
+            if (state.isVideoMode) {
+                files.forEach(file => recordVideoProcessingError(file, `API 预检失败，未执行视频识别：${message}`));
+            } else {
                 files.forEach(file => recordImageProcessingError(file, `API 预检失败，未执行识别：${message}`));
             }
             els.statusMsg.textContent = `无法开始分析：${message}`;
             alert(
                 `无法开始分析\n\n${message}\n\n` +
                 `请在“API 设置”中测试配置，或稍后重试。\n` +
-                `当前导入图片已保留到复核台的 error 分类，可连同同名 TXT 一起导出。`
+                (state.isVideoMode
+                    ? '当前视频及抽帧缓存仍保留，可修复配置后继续分析或导出已完成部分。'
+                    : '当前导入图片已保留到复核台的 error 分类，可连同同名 TXT 一起导出。')
             );
             window.AppConfigManager.open?.();
             return;
@@ -800,66 +1051,9 @@ async function startAnalysis() {
         els.statusMsg.textContent = `错误: ${err.message}`;
     } finally {
         setLoading(false);
-        if(!state.isVideoMode) els.progress.box.classList.add('hidden');
+        els.progress.box.classList.add('hidden');
     }
 }
-
-// [必须新增] 请将此函数添加在 startAnalysis 下方
-async function batchExtractFrames() {
-    if (!state.files || state.files.length === 0) return;
-    
-    // UI 设置为抽帧中
-    state.isProcessing = true;
-    els.startBtn.disabled = true; // 变灰
-    els.startBtn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
-    els.startBtn.classList.add('bg-gray-400', 'cursor-not-allowed');
-    els.progress.box.classList.remove('hidden');
-    
-    let completed = 0;
-    const total = state.files.length;
-    
-    const fpsInput = $('frameRate');
-    let targetFps = fpsInput ? parseFloat(fpsInput.value || '1') : 1;
-    
-    for (let i = 0; i < total; i++) {
-        const file = state.files[i];
-        
-        let frames = [];
-        let currentFps = targetFps;
-        
-        // 检查是否有历史记录（修复导入任务FPS丢失）
-        const existingResult = state.videoResults.find(r => r.fileName === file.name);
-        if (existingResult && existingResult.fps) {
-            currentFps = existingResult.fps;
-            if(fpsInput) fpsInput.value = currentFps; // 同步UI
-        }
-
-        updateProgress(Math.round(((completed) / total) * 100), `正在抽帧 (${i+1}/${total}): ${file.name}`);
-        
-        const video = document.createElement('video');
-        video.src = URL.createObjectURL(file);
-        await new Promise(r => video.onloadedmetadata = r);
-        frames = await extractFrames(video, currentFps);
-        URL.revokeObjectURL(video.src);
-        video.remove();
-        
-        // 存入缓存
-        state.videoFramesCache.set(file.name, { frames, fps: currentFps });
-        completed++;
-    }
-    
-    updateProgress(100, '所有视频抽帧完成，请开始分析');
-    
-    // UI 恢复与变身
-    state.isProcessing = false;
-    state.videoAnalysisReady = true;
-    
-    els.startBtn.disabled = false;
-    els.startBtn.classList.remove('bg-gray-400', 'cursor-not-allowed');
-    els.startBtn.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
-    els.btnText.textContent = "开始分析"; // 变身
-}
-
 
 async function analyzeImage(config) {
     const base64 = els.imageCanvas.toDataURL('image/jpeg', 0.8).split(',')[1];
@@ -929,11 +1123,26 @@ function drawStyledAnnotation(ctx, ann, w, h, rect) {
     ctx.fillText(ann.label, labelX + 5, labelY + 18);
 }
 
+function syncTeachingLabelControls() {
+    const requested = getRequestedClassNames();
+    const labels = requested.length ? requested : (getAllClasses().filter(Boolean).length ? getAllClasses().filter(Boolean) : ['target']);
+    if (!labels.includes(state.teachingLabel)) state.teachingLabel = labels[0];
+    for (const select of [els.teachingLabelSelect, els.teachingFloatingLabelSelect]) {
+        if (!select) continue;
+        if (JSON.stringify([...select.options].map(option => option.value)) !== JSON.stringify(labels)) {
+            select.replaceChildren(...labels.map(label => {
+                const option = document.createElement('option');
+                option.value = label; option.textContent = label;
+                return option;
+            }));
+        }
+        select.value = state.teachingLabel;
+    }
+}
+
 function getTeachingLabel() {
-    const manual = (els.classLabelInput.value || '').trim().split(/\s+/).filter(Boolean);
-    if (manual.length > 0) return manual[0];
-    const knownClasses = getAllClasses().filter(Boolean);
-    return knownClasses[0] || 'target';
+    syncTeachingLabelControls();
+    return state.teachingLabel;
 }
 
 function getTeachingCanvasPoint(event) {
@@ -1014,6 +1223,7 @@ function drawTeachingBoxes(ctx) {
 }
 
 function updateTeachingStatus() {
+    syncTeachingLabelControls();
     const examples = Array.isArray(state.teachingExamples) ? state.teachingExamples : [];
     const savedBoxes = examples.reduce((sum, example) => sum + (example.boxes?.length || 0), 0);
     const draftBoxes = state.teachingDraftBoxes?.length || 0;
@@ -1364,25 +1574,8 @@ function goToAnnotation(index) {
 }
 
 // --- 视频处理辅助 ---
-
-async function analyzeVideo(config) {
-    updateProgress(0, '正在处理视频帧...');
-    const frames = await extractFrames(els.videoPlayer, 1); // 每秒1帧
-    let allAnns = [];
-    
-    for (let i = 0; i < frames.length; i++) {
-        const res = await callAPI(config, [{ role: "user", content: [
-            { type: "text", text: `标注物体并返回 JSON: [{"label":"物体名", "box_2d":[y1,x1,y2,x2]}]` },
-            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${frames[i].base64}` } }
-        ]}]);
-        const timedRes = res.map(r => ({ ...r, time: frames[i].time }));
-        allAnns.push(...timedRes);
-        updateProgress(((i+1)/frames.length)*100, `分析中: ${i+1}/${frames.length}`);
-    }
-    
-    state.annotations = allAnns;
-    renderTimeline(allAnns);
-}
+// 视频批处理只走 processVideosBatch()/analyzeVideoFile()，确保暂停、停止、
+// 断点恢复、单文件失败隔离和导出清单使用同一套状态模型。
 
 function drawVideoOverlay() {
     if (!state.isVideoMode) return;
@@ -1472,7 +1665,7 @@ async function fetchAPIWithRetry(config, messages, maxAttempts = 3) {
                 },
                 // 部分视觉模型不支持 response_format，且原提示要求顶层数组；
                 // 依靠下面的容错解析兼容数组、objects、detections 和 boxes。
-                body: JSON.stringify({ model: config.model, messages })
+                body: JSON.stringify({ model: config.model, messages, stream: false })
             });
             rawText = await response.text();
         } catch (error) {
@@ -1522,31 +1715,18 @@ async function fetchAPIWithRetry(config, messages, maxAttempts = 3) {
     throw lastError || new Error('API 请求失败');
 }
 
-function parseModelJsonContent(content) {
-    if (typeof content !== 'string' || !content.trim()) {
-        throw new Error('模型响应内容为空');
-    }
-
-    const jsonMatch = content.match(/\[[\s\S]*\]/) || content.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-        throw new Error(`模型没有返回可解析的 JSON：${content.slice(0, 500)}`);
-    }
-
-    try {
-        return JSON.parse(jsonMatch[0]);
-    } catch (_) {
-        throw new Error(`模型返回的 JSON 格式错误：${content.slice(0, 500)}`);
-    }
+function parseModelJsonContent(content, kind = 'any') {
+    return AnnotationCore.parseModelJson(content, kind);
 }
 
-async function callAPIJson(config, messages) {
+async function callAPIJson(config, messages, kind = 'any') {
     const rawText = await fetchAPIWithRetry(config, messages);
 
     let data;
     try {
         data = JSON.parse(rawText);
     } catch (_) {
-        throw new Error(`API 返回的不是 JSON：${rawText.slice(0, 500)}`);
+        throw new Error('API 返回了网页或非 JSON 内容，请检查完整的 /v1/chat/completions 地址');
     }
 
     const rawContent = data?.choices?.[0]?.message?.content;
@@ -1554,43 +1734,38 @@ async function callAPIJson(config, messages) {
         ? rawContent.map(part => part?.text || part?.content || '').join('\n')
         : rawContent;
     if (typeof content !== 'string' || !content.trim()) {
-        throw new Error(`API 响应缺少 choices[0].message.content：${rawText.slice(0, 500)}`);
+        throw new Error('API 响应缺少 choices[0].message.content，请检查聊天接口与模型配置');
     }
-
-    return parseModelJsonContent(content);
+    if (['length', 'content_filter'].includes(data?.choices?.[0]?.finish_reason)) {
+        throw new Error('模型响应被截断或拦截，结果已保留为异常，不能当作无目标');
+    }
+    return parseModelJsonContent(content, kind);
 }
 
-async function callAPI(config, messages) {
-    const parsed = await callAPIJson(config, messages);
-
-    const objects = Array.isArray(parsed)
-        ? parsed
-        : (parsed.objects || parsed.detections || parsed.boxes || []);
-    if (!Array.isArray(objects)) {
-        throw new Error(`模型返回的目标列表不是数组：${JSON.stringify(parsed).slice(0, 500)}`);
-    }
-
-    return objects.filter(item =>
-        item &&
-        typeof item.label === 'string' &&
-        Array.isArray(item.box_2d) &&
-        item.box_2d.length === 4 &&
-        item.box_2d.every(value => Number.isFinite(Number(value)))
-    );
+async function callAPI(config, messages, kind = 'detections') {
+    const parsed = await callAPIJson(config, messages, kind);
+    return AnnotationCore.normalizeObjects(parsed, getRequestedClassNames(), kind);
 }
 
 async function extractFrames(video, fps, onProgress) {
     const duration = video.duration;
+    if (!Number.isFinite(duration) || duration <= 0) throw new Error('视频时长无效，无法抽帧');
+    const safeFps = Math.min(30, Math.max(.1, Number(fps) || 1));
     const frames = [];
     const canvas = document.createElement('canvas');
     canvas.width = video.videoWidth; canvas.height = video.videoHeight;
     const ctx = canvas.getContext('2d');
-    for (let t = 0; t < duration; t += (1/fps)) {
+    const expectedFrames = Math.max(1, Math.ceil(duration * safeFps));
+    for (let t = 0; t < duration; t += (1/safeFps)) {
+        while (window.TaskManager?.isPaused && !window.TaskManager?.isStopped) {
+            await new Promise(resolve => setTimeout(resolve, 120));
+        }
+        if (window.TaskManager?.isStopped) break;
         video.currentTime = t;
         await new Promise(r => video.onseeked = r);
         ctx.drawImage(video, 0, 0);
         frames.push({ time: t, base64: canvas.toDataURL('image/jpeg', 0.6).split(',')[1] });
-        if (onProgress) onProgress(t / (duration || 1));
+        if (onProgress) onProgress(Math.min(1, frames.length / expectedFrames));
     }
     return frames;
 }
@@ -1644,7 +1819,7 @@ async function verifyTargetPresence(config, base64, prompt, targetJsonLabel, tea
             type: 'text',
             text:
                 `这是一次独立的“目标是否存在”复核，不负责画框。目标任务：${prompt}。` +
-                `目标类别：${targetJsonLabel}。${teachingNote}` +
+                `目标类别：${JSON.stringify(getRequestedClassNames().length ? getRequestedClassNames() : [targetJsonLabel])}。${teachingNote}` +
                 '请仔细检查整张图片，尤其是四角、边缘、遮挡处、低对比区域和尺寸很小的目标。' +
                 '图片可能完全没有目标，也可能只有一个或包含非常多目标；不要预设数量。' +
                 '宁可把不确定情况标记为存在，也不要把可能有目标的图片误判为空。' +
@@ -1655,11 +1830,12 @@ async function verifyTargetPresence(config, base64, prompt, targetJsonLabel, tea
         { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64}` } }
     ]);
 
-    const raw = await callAPIJson(config, messages);
+    const raw = await callAPIJson(config, messages, 'presence');
     const value = Array.isArray(raw) ? (raw[0] || {}) : (raw || {});
     const rawCount = value.estimated_count ?? value.estimatedCount ?? value.count;
+    const validCount = rawCount !== null && rawCount !== '' && typeof rawCount !== 'boolean' && Number.isInteger(Number(rawCount)) && Number(rawCount) >= 0;
     const estimatedCount = Math.max(0, Math.round(Number(rawCount) || 0));
-    const rawConfidence = Number(value.confidence);
+    const rawConfidence = value.confidence === null || typeof value.confidence === 'boolean' ? NaN : Number(value.confidence);
     const confidence = Number.isFinite(rawConfidence)
         ? Math.max(0, Math.min(1, rawConfidence))
         : 0;
@@ -1668,7 +1844,7 @@ async function verifyTargetPresence(config, base64, prompt, targetJsonLabel, tea
     const explicitTrue = rawHasTarget === true || rawHasTarget === 'true' || rawHasTarget === 1;
 
     // 字段缺失、互相矛盾或低置信度都按“可能存在”处理，避免制造错误负样本。
-    const hasTarget = estimatedCount > 0 || explicitTrue || !explicitFalse;
+    const hasTarget = !validCount || estimatedCount > 0 || explicitTrue || !explicitFalse;
     return {
         hasTarget,
         estimatedCount,
@@ -1832,6 +2008,21 @@ async function detectTargetsInHighResolutionTiles(
     };
 }
 
+async function reviewDetectionCompleteness(config, base64, prompt, classInstruction, boxes) {
+    const existing = boxes.map(({ label, box_2d }) => ({ label, box_2d }));
+    const messages = buildTeachingMessages([
+        { type: 'text', text:
+            `目标任务：${prompt}。${classInstruction}\n` +
+            `已定位的目标：${JSON.stringify(existing)}。请独立逐类扫描整图，尤其检查小目标、遮挡、边缘和与背景相似的目标。` +
+            '只补充尚未框出的独立目标，不重复已有框，不因某类缺失而虚构目标；地面图案、阴影和长条边框不能当作立体物体。' +
+            '坐标为当前整图 0—1000 的 [ymin,xmin,ymax,xmax]。' +
+            '只返回 JSON 对象：{"missing_objects":[{"label":"类别名","box_2d":[ymin,xmin,ymax,xmax]}],"complete":true或false,"reason":"简短依据"}。' +
+            '没有漏检时 missing_objects=[]；无法确认完整时 complete=false。不要输出解释过程或 Markdown。' },
+        { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64}` } }
+    ]);
+    return callAPIJson(config, messages, 'review');
+}
+
 async function processImageTwoStage(
     config,
     reportProgress = true,
@@ -1855,18 +2046,7 @@ async function processImageTwoStage(
     const targetJsonLabel = (manualLabels.length > 0) ? manualLabels[0] : (classLabelInputVal || prompt);
 
     // ... (构造 msg1, 调用 callAPI API检测 Box) ...
-    let classInstruction = "";
-    if (state.unifiedClassMap.size > 0) {
-        const classes = getAllClasses();
-        const classListStr = classes.map((c, i) => `${i}:${c}`).join(',');
-        classInstruction = `\n请严格优先使用以下已知类别标准名称(ID:名称): [${classListStr}]。`;
-    } else if (manualLabels.length > 1) {
-        // 多标签模式
-        classInstruction = `\n多类别检测模式。请识别以下类别: ${JSON.stringify(manualLabels)}。返回的 "label" 字段必须严格匹配其中之一。`;
-    } else {
-        // 单标签模式（或回退）
-        classInstruction = `\nOutput Label MUST be: "${targetJsonLabel}"`;
-    }
+    const classInstruction = buildTaskClassInstruction(targetJsonLabel);
 
     const teachingCount = Math.min(3, state.teachingExamples?.length || 0);
     const teachingInstruction = teachingCount > 0
@@ -1896,7 +2076,7 @@ async function processImageTwoStage(
         status: boxes.length > 0 ? 'detected' : 'checking_empty',
         verifiedEmpty: false,
         needsReview: false,
-        confidence: boxes.length > 0 ? 1 : 0,
+        confidence: null,
         estimatedCount: boxes.length,
         reason: boxes.length > 0 ? '初次检测已定位到目标' : '初次检测返回空数组'
     };
@@ -2050,6 +2230,28 @@ async function processImageTwoStage(
     }
 
 
+    if (boxes.length > 0 && els.verifyDetections?.checked !== false) {
+        try {
+            const review = await reviewDetectionCompleteness(config, base64, prompt, classInstruction, boxes);
+            const missing = AnnotationCore.normalizeObjects(review.missing_objects, getRequestedClassNames());
+            const merged = AnnotationCore.mergeMissing(boxes, missing);
+            boxes = merged.boxes;
+            validation = {
+                ...validation,
+                status: merged.added ? 'recovered_missing' : 'reviewed_detected',
+                needsReview: validation.needsReview || !review.complete || merged.conflict,
+                completenessChecked: true,
+                recoveredCount: merged.added,
+                confidence: null,
+                estimatedCount: boxes.length,
+                reason: merged.conflict ? '复核结果存在类别冲突，请人工检查' : (review.reason || '已逐类复核目标完整性')
+            };
+        } catch (error) {
+            validation = { ...validation, status: 'needs_review', needsReview: true, confidence: null,
+                reason: `已保留初次框，但漏检复核失败：${error?.message || error}` };
+        }
+    }
+
     boxes.forEach(b => getClassId(b.label));
 
     // 第一阶段一拿到框就通知当前视图；调用方会再次核对文件是否仍被选中。
@@ -2133,7 +2335,7 @@ async function processImageTwoStage(
                 { type: "text", text: `返回精确多边形 [{"label":"${b.label}","polygon":[[y,x],...]]}]，坐标归一化到0-1000。尤其要包含向外突出或向内凹的尖角和转折处` },
                 { type: "image_url", image_url: { url: `data:image/jpeg;base64,${up64}` } }
             ]}];
-            const polys = await callAPI(config, msg2);
+            const polys = await callAPI(config, msg2, 'polygons');
             const a1 = performance.now();
             apiTime += (a1 - a0);
             
@@ -2342,6 +2544,25 @@ function recordImageProcessingError(file, message) {
     return result;
 }
 
+function recordVideoProcessingError(file, message) {
+    const normalizedMessage = String(message || '未知视频处理错误');
+    const existingIndex = state.videoResults.findIndex(item => item.file === file || item.fileName === file?.name);
+    const existing = existingIndex >= 0 ? state.videoResults[existingIndex] : null;
+    const result = {
+        ...(existing || {}),
+        fileName: file?.name || existing?.fileName || '未命名视频',
+        file: file || existing?.file,
+        annotations: Array.isArray(existing?.annotations) ? existing.annotations : [],
+        isPartial: true,
+        needsReview: true,
+        processingError: normalizedMessage,
+        frameErrors: [...(existing?.frameErrors || []), normalizedMessage]
+    };
+    if (existingIndex >= 0) state.videoResults[existingIndex] = result;
+    else state.videoResults.push(result);
+    return result;
+}
+
 async function processVideosBatch(config) {
     const files = state.files && state.files.length ? state.files : (state.file ? [state.file] : []);
     if (files.length === 0) return;
@@ -2349,11 +2570,9 @@ async function processVideosBatch(config) {
     // state.videoResults = []; // Modified for resume support
     if (!state.videoResults) state.videoResults = [];
     
+    // 每次执行都按本轮完成的 worker 计数；历史结果只用于断点定位，
+    // 不能预先累加，否则恢复任务时进度会超过 100%。
     let completed = 0;
-    if (state.videoResults.length > 0) {
-        const fileNames = new Set(files.map(f => f.name));
-        completed = state.videoResults.filter(r => fileNames.has(r.fileName)).length;
-    }
     const total = files.length;
     const isSingleFile = total === 1;
 
@@ -2363,9 +2582,12 @@ async function processVideosBatch(config) {
             ? (pct, text) => updateProgress(pct, text)
             : null;
 
-        const result = await analyzeVideoFile(file, config, onProgress);
-        // state.videoResults.push({ fileName: file.name, file, annotations: result.annotations, fps: result.fps });
-        // Result is already updated in state.videoResults by analyzeVideoFile (via partialResult update)
+        try {
+            await analyzeVideoFile(file, config, onProgress);
+        } catch (error) {
+            recordVideoProcessingError(file, error?.message || error);
+            throw error;
+        }
         
         if (!isSingleFile) {
             completed++;
@@ -2375,118 +2597,134 @@ async function processVideosBatch(config) {
     
     if (!isSingleFile) updateProgress(0, `准备处理 ${total} 个视频...`);
 
-    await runWithConcurrency(files, worker, concurrency);
-    els.statusMsg.textContent = `视频批量处理完成：${state.videoResults.length}项`;
+    const batchSummary = await runWithConcurrency(files, worker, concurrency);
+    const failedFrames = state.videoResults.reduce((sum, item) => sum + Number(item.failedFrames || 0), 0);
+    const currentResult = state.videoResults.find(item => item.file === state.file || item.fileName === state.file?.name);
+    if (currentResult) {
+        state.annotations = JSON.parse(JSON.stringify(currentResult.annotations || []));
+        renderTimeline(state.annotations);
+        drawVideoOverlay();
+    }
+    const stoppedText = batchSummary?.stopped ? ' · 已停止，可稍后从断点继续' : '';
+    els.statusMsg.textContent = failedFrames > 0 || batchSummary?.failed > 0
+        ? `视频处理完成：${state.videoResults.length} 项 · 文件失败 ${batchSummary?.failed || 0} · 帧失败 ${failedFrames}${stoppedText}`
+        : `视频处理完成：${state.videoResults.length} 项${stoppedText}`;
+    return batchSummary;
 }
 
 async function analyzeVideoFile(file, config, onProgress) {
-    return new Promise(async (resolve, reject) => {
-        let frames = [];
-        let fps = 1;
+    let frames = [];
+    let fps = 1;
 
-        // 1. 优先尝试从缓存获取抽帧结果 (Phase 1 产物)
-        if (state.videoFramesCache.has(file.name)) {
-            const cache = state.videoFramesCache.get(file.name);
-            frames = cache.frames;
-            fps = cache.fps;
-        } 
-        // 2. 如果没有缓存，则检查是否是恢复任务/导入任务 (Bug Fix核心)
-        else {
-            const video = document.createElement('video');
-            video.src = URL.createObjectURL(file);
-            await new Promise(r => video.onloadedmetadata = r);
+    if (state.videoFramesCache.has(file.name)) {
+        const cache = state.videoFramesCache.get(file.name);
+        frames = cache.frames;
+        fps = cache.fps;
+    } else {
+        const video = document.createElement('video');
+        const objectUrl = URL.createObjectURL(file);
+        video.src = objectUrl;
+        try {
+            await new Promise((resolve, reject) => {
+                video.onloadedmetadata = resolve;
+                video.onerror = () => reject(new Error(`无法读取视频：${file.name}`));
+            });
 
-            // [Bug Fix]: 检查 videoResults 中是否有旧的任务设置
             const existingResult = state.videoResults.find(r => r.fileName === file.name);
-            
             if (existingResult && existingResult.fps) {
                 fps = existingResult.fps;
-                // 同步 UI 告诉用户这是恢复的FPS
-                if($('frameRate')) $('frameRate').value = fps;
+                if ($('frameRate')) $('frameRate').value = fps;
             } else {
                 const fpsInput = $('frameRate');
-                fps = fpsInput ? parseFloat(fpsInput.value || '1') : 1;
+                fps = els.manualFrame?.checked && fpsInput ? parseFloat(fpsInput.value || '1') : 1;
             }
-
             frames = await extractFrames(video, fps);
-            URL.revokeObjectURL(video.src);
+            state.videoFramesCache.set(file.name, { frames, fps });
+        } finally {
+            URL.revokeObjectURL(objectUrl);
             video.remove();
         }
+    }
 
-        // 接下来的逻辑是处理帧分析（API调用）
-        let allAnns = [];
-        let startIndex = 0;
-        
-        const existingResultIndex = state.videoResults.findIndex(r => r.fileName === file.name);
-        if (existingResultIndex !== -1) {
-            const existing = state.videoResults[existingResultIndex];
-            if (existing.annotations && existing.annotations.length > 0) {
-                 const lastTime = existing.annotations[existing.annotations.length - 1].time;
-                 const nextFrameIndex = frames.findIndex(f => f.time > lastTime + 0.01);
-                 if (nextFrameIndex !== -1) {
-                     startIndex = nextFrameIndex;
-                     allAnns = [...existing.annotations];
-                     state.videoResults.splice(existingResultIndex, 1);
-                     if (onProgress) onProgress(Math.round((startIndex / frames.length) * 100), `恢复进度: 从第 ${startIndex + 1} 帧继续...`);
-                 } else {
-                     resolve(existing);
-                     return;
-                 }
+    let allAnns = [];
+    let startIndex = 0;
+    let failedFrames = 0;
+    let frameErrors = [];
+    const existingResultIndex = state.videoResults.findIndex(r => r.fileName === file.name);
+    if (existingResultIndex !== -1) {
+        const existing = state.videoResults[existingResultIndex];
+        existing.file = file;
+        if (Number.isInteger(existing.lastProcessedFrameIndex)) {
+            startIndex = Math.min(frames.length, existing.lastProcessedFrameIndex + 1);
+        } else if (Array.isArray(existing.annotations) && existing.annotations.length > 0) {
+            const lastTime = Math.max(...existing.annotations.map(item => Number(item.time) || 0));
+            const inferredIndex = frames.findIndex(frame => frame.time > lastTime + .01);
+            startIndex = inferredIndex < 0 ? frames.length : inferredIndex;
+        }
+        allAnns = [...(existing.annotations || [])];
+        failedFrames = Number(existing.failedFrames || 0);
+        frameErrors = [...(existing.frameErrors || [])];
+        if (startIndex >= frames.length && existing.isPartial !== true) {
+            return existing;
+        }
+        state.videoResults.splice(existingResultIndex, 1);
+        if (onProgress && startIndex > 0) {
+            onProgress(Math.round((startIndex / Math.max(1, frames.length)) * 100), `从第 ${startIndex + 1} 帧继续`);
+        }
+    }
+
+    const prompt = els.promptInput.value.trim() || '物体';
+    const classLabelInputVal = els.classLabelInput.value.trim();
+    const manualLabels = classLabelInputVal ? classLabelInputVal.split(/\s+/) : [];
+    const targetJsonLabel = manualLabels[0] || classLabelInputVal || prompt;
+    const partialResult = {
+        fileName: file.name,
+        file,
+        annotations: allAnns,
+        fps,
+        frameCount: frames.length,
+        lastProcessedFrameIndex: startIndex - 1,
+        failedFrames,
+        frameErrors,
+        isPartial: true,
+        needsReview: failedFrames > 0
+    };
+    state.videoResults.push(partialResult);
+
+    const classInstruction = buildTaskClassInstruction(targetJsonLabel);
+
+    for (let i = startIndex; i < frames.length; i++) {
+        while (window.TaskManager?.isPaused && !window.TaskManager?.isStopped) {
+            await new Promise(resolve => setTimeout(resolve, 120));
+        }
+        if (window.TaskManager?.isStopped) break;
+        try {
+            const res = await callAPI(config, [{ role: 'user', content: [
+                { type: 'text', text: `Task: ${prompt}. 标注并返回 JSON: [{"label":"${targetJsonLabel}", "box_2d":[y1,x1,y2,x2]}]${classInstruction}` },
+                { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${frames[i].base64}` } }
+            ] }]);
+            res.forEach(box => getClassId(box.label));
+            allAnns.push(...res.map(item => ({ ...item, time: frames[i].time })));
+        } catch (error) {
+            failedFrames += 1;
+            frameErrors.push(`第 ${i + 1} 帧：${String(error?.message || error || '识别失败')}`);
+            console.error('Frame analysis failed', error);
+        } finally {
+            partialResult.annotations = allAnns;
+            partialResult.lastProcessedFrameIndex = i;
+            partialResult.failedFrames = failedFrames;
+            partialResult.frameErrors = frameErrors.slice(-30);
+            partialResult.needsReview = failedFrames > 0;
+            if (onProgress) {
+                onProgress(Math.round(((i + 1) / Math.max(1, frames.length)) * 100), `视频分析中：${i + 1}/${frames.length} 帧 · 失败 ${failedFrames}`);
             }
         }
-        
-        const prompt = els.promptInput.value.trim() || '物体';
-        const classLabelInputVal = els.classLabelInput.value.trim();
-        const manualLabels = classLabelInputVal ? classLabelInputVal.split(/\s+/) : [];
-        const targetJsonLabel = (manualLabels.length > 0) ? manualLabels[0] : (classLabelInputVal || prompt);
-        
-        const partialResult = { fileName: file.name, file, annotations: allAnns, fps, isPartial: true };
-        state.videoResults.push(partialResult);
-        
-        let classInstruction = "";
-        if (state.unifiedClassMap.size > 0) {
-            const classes = getAllClasses();
-            const classListStr = classes.map((c, i) => `${i}:${c}`).join(',');
-            classInstruction = `\n请严格优先使用以下已知类别标准名称(ID:名称): [${classListStr}]。`;
-        } else if (manualLabels.length > 1) {
-             classInstruction = `\n多类别检测模式。请识别: ${JSON.stringify(manualLabels)}。返回的 "label" 字段必须严格匹配其中之一。`;
-        } else {
-             classInstruction = `\nOutput Label MUST be: "${targetJsonLabel}"`; 
-        }
+    }
 
-        for (let i = startIndex; i < frames.length; i++) {
-            while (window.TaskManager && window.TaskManager.isPaused) {
-                if (window.TaskManager.isStopped) break;
-                await new Promise(r => setTimeout(r, 500));
-            }
-            if (window.TaskManager && window.TaskManager.isStopped) break;
-
-            try {
-                const res = await callAPI(config, [{ role: "user", content: [
-                    { type: "text", text: `Task: ${prompt}. 标注并返回 JSON: [{"label":"${targetJsonLabel}", "box_2d":[y1,x1,y2,x2]}]${classInstruction}` },
-                    { type: "image_url", image_url: { url: `data:image/jpeg;base64,${frames[i].base64}` } }
-                ]}]);
-
-
-                
-                res.forEach(b => getClassId(b.label));
-
-                const timedRes = res.map(r => ({ ...r, time: frames[i].time }));
-                allAnns.push(...timedRes);
-                
-                partialResult.annotations = allAnns;
-                
-                if (onProgress) {
-                    onProgress(Math.round(((i + 1) / frames.length) * 100), `视频分析中: ${i + 1}/${frames.length} 帧`);
-                }
-            } catch (e) {
-                console.error("Frame analysis failed", e);
-            }
-        }
-        
-        delete partialResult.isPartial;
-        resolve({ annotations: allAnns, fps });
-    });
+    partialResult.isPartial = Boolean(window.TaskManager?.isStopped);
+    partialResult.needsReview = partialResult.isPartial || failedFrames > 0;
+    partialResult.processingError = failedFrames > 0 ? `${failedFrames} 帧识别失败，已保留其余结果` : '';
+    return partialResult;
 }
 
 
@@ -2529,6 +2767,36 @@ async function exportBatchImageLabels() {
     alert('分类复核模块尚未加载完成，请刷新页面后重试。');
 }
 
+async function saveGeneratedZip(blob, fileName, { title, message, note } = {}) {
+    const destination = window.TaskManager?.chooseTaskExportDestination
+        ? await window.TaskManager.chooseTaskExportDestination(fileName)
+        : { kind: 'download', fileName };
+    if (!destination) {
+        els.statusMsg.textContent = '已取消导出';
+        return null;
+    }
+    const saved = window.TaskManager?.saveTaskBlob
+        ? await window.TaskManager.saveTaskBlob(blob, destination, false)
+        : await (async () => {
+            const objectUrl = URL.createObjectURL(blob);
+            const anchor = document.createElement('a');
+            anchor.href = objectUrl;
+            anchor.download = fileName;
+            anchor.click();
+            setTimeout(() => URL.revokeObjectURL(objectUrl), 60000);
+            return { confirmed: false, path: fileName };
+        })();
+    els.statusMsg.textContent = saved.confirmed ? `已保存：${saved.path}` : `已提交下载：${saved.path}`;
+    window.showExportCompletion?.({
+        title: title || (saved.confirmed ? '导出完成' : '已提交下载'),
+        message: message || '导出包已经生成。',
+        path: saved.path,
+        confirmed: saved.confirmed,
+        note: saved.confirmed ? note : `${note || ''} 当前浏览器未返回完整磁盘路径，请在下载列表确认文件。`.trim()
+    });
+    return saved;
+}
+
 async function exportBatchVideoFrames() {
     if (!state.videoResults || state.videoResults.length === 0) return alert('暂无视频标注结果');
     const zip = new JSZip();
@@ -2537,62 +2805,83 @@ async function exportBatchVideoFrames() {
 
     // 确保所有结果中的标签都已注册到统一映射中
     state.videoResults.forEach(item => {
-        item.annotations.forEach(ann => getClassId(ann.label));
+        (item.annotations || []).forEach(ann => getClassId(ann.label));
     });
     const classes = getAllClasses();
     zip.file('classes.txt', classes.join('\n'));
 
-    els.statusMsg.textContent = '正在导出视频帧...';
+    const manifest = { exportedAt: new Date().toISOString(), videos: [], errors: [] };
+    els.statusMsg.textContent = '正在整理视频帧与 YOLO 标签...';
 
     for (const item of state.videoResults) {
-        // 重新提取帧
-        const video = document.createElement('video');
-        video.src = URL.createObjectURL(item.file);
-        // 等待元数据以确保提取准确
-        await new Promise(r => video.onloadedmetadata = r);
-        
-        const fps = item.fps || 1;
-        const frames = await extractFrames(video, fps);
-        
-        // 基础文件名（无扩展名）
-        const baseName = item.fileName.substring(0, item.fileName.lastIndexOf('.'));
+        try {
+            if (!(item.file instanceof Blob)) throw new Error('缺少原始视频文件');
+            const fps = Number(item.fps || 1);
+            let frames = state.videoFramesCache.get(item.fileName)?.frames || null;
+            if (!frames?.length) {
+                const video = document.createElement('video');
+                const objectUrl = URL.createObjectURL(item.file);
+                video.src = objectUrl;
+                try {
+                    await new Promise((resolve, reject) => {
+                        video.onloadedmetadata = resolve;
+                        video.onerror = () => reject(new Error('无法解码原始视频'));
+                    });
+                    frames = await extractFrames(video, fps);
+                } finally {
+                    URL.revokeObjectURL(objectUrl);
+                    video.remove();
+                }
+            }
+            const baseName = String(item.fileName || 'video').replace(/\.[^.]+$/, '');
+            let labeledFrames = 0;
 
-        for (let i = 0; i < frames.length; i++) {
-            const frame = frames[i];
-            const frameName = `${baseName}_${String(i).padStart(5, '0')}`;
-            
-            // 保存图片
-            const base64 = frame.base64; 
-            imgFolder.file(`${frameName}.jpg`, base64, { base64: true });
+            for (let i = 0; i < frames.length; i++) {
+                const frame = frames[i];
+                const frameName = `${baseName}_${String(i).padStart(5, '0')}`;
+                imgFolder.file(`${frameName}.jpg`, frame.base64, { base64: true });
 
-            // 查找该帧的标注
-            // 使用时间匹配，允许小误差
-            const frameAnns = item.annotations.filter(ann => Math.abs(ann.time - frame.time) < (0.5/fps));
-            
-            if (frameAnns.length > 0) {
+                const frameAnns = (item.annotations || []).filter(ann =>
+                    Array.isArray(ann.box_2d) && Math.abs(Number(ann.time) - frame.time) < (0.5 / fps)
+                );
+                if (frameAnns.length > 0) labeledFrames += 1;
                 const lines = frameAnns.map(ann => {
                     const clsId = getClassId(ann.label);
-                    const [ymin, xmin, ymax, xmax] = ann.box_2d;
+                    const [ymin, xmin, ymax, xmax] = ann.box_2d.map(Number);
                     const cx = ((xmin + xmax) / 2) / 1000;
                     const cy = ((ymin + ymax) / 2) / 1000;
-                    const w = (xmax - xmin) / 1000;
-                    const h = (ymax - ymin) / 1000;
+                    const w = Math.abs(xmax - xmin) / 1000;
+                    const h = Math.abs(ymax - ymin) / 1000;
                     return `${clsId} ${cx.toFixed(6)} ${cy.toFixed(6)} ${w.toFixed(6)} ${h.toFixed(6)}`;
                 });
                 lblFolder.file(`${frameName}.txt`, lines.join('\n'));
-            } else {
-                lblFolder.file(`${frameName}.txt`, "");
             }
+            manifest.videos.push({
+                fileName: item.fileName,
+                fps,
+                frames: frames.length,
+                labeledFrames,
+                failedRecognitionFrames: Number(item.failedFrames || 0),
+                partial: item.isPartial === true
+            });
+        } catch (error) {
+            manifest.errors.push({ fileName: item.fileName, message: String(error?.message || error) });
         }
     }
 
-    els.statusMsg.textContent = '正在打包...';
-    const blob = await zip.generateAsync({ type: 'blob' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `video_frames_yolo_${Date.now()}.zip`;
-    a.click();
-    els.statusMsg.textContent = '导出完成';
+    if (!manifest.videos.length) throw new Error(`没有可导出的视频帧：${manifest.errors[0]?.message || '未知错误'}`);
+    zip.file('video_export_manifest.json', JSON.stringify(manifest, null, 2));
+    els.statusMsg.textContent = '正在生成视频帧数据包...';
+    const blob = await zip.generateAsync({ type: 'blob' }, metadata => {
+        updateProgress(metadata.percent || 0, `正在打包：${Math.round(metadata.percent || 0)}%`);
+    });
+    await saveGeneratedZip(blob, `video_frames_yolo_${Date.now()}.zip`, {
+        title: '视频帧数据集导出完成',
+        message: `已导出 ${manifest.videos.length} 个视频的抽帧图片与同名 YOLO TXT。`,
+        note: manifest.errors.length
+            ? `${manifest.errors.length} 个视频导出失败，详情已写入 video_export_manifest.json；其他视频已保留。`
+            : 'classes.txt 和 video_export_manifest.json 已一并写入。'
+    });
 }
 
 async function exportAllCroppedImages() {
@@ -2618,65 +2907,67 @@ async function exportAllCroppedImages() {
 
 async function exportAllTaggedVideos() {
     if (!state.videoResults || state.videoResults.length === 0) return alert('暂无可导出的视频');
-    
-    // 1. 为所有结果分配追踪ID (Track IDs)
-    state.videoResults.forEach(item => {
-        if (item.annotations && item.annotations.length > 0) {
-            item.annotations = assignTrackIds(item.annotations);
-        }
-    });
 
     const zip = new JSZip();
     const folder = zip.folder('videos_tagged');
-    
+    const unmarkedFolder = zip.folder('videos_without_annotations');
+    const manifest = { exportedAt: new Date().toISOString(), videos: [], errors: [] };
     els.statusMsg.textContent = '正在准备导出...';
-    els.progress.box.classList.remove('hidden'); // 显示进度条容器
-    
+    els.progress.box.classList.remove('hidden');
     let completed = 0;
     const total = state.videoResults.length;
 
-    // 2. 逐个处理视频导出
-    for (const item of state.videoResults) {
-        if (!item.annotations || item.annotations.length === 0) {
-            completed++;
-            continue;
-        }
-        
-        // 定义单个视频的进度回调
-        const onProgress = (pct) => {
-            const currentVideoProgress = pct / 100;
-            // 总进度 = (已完成视频数 + 当前视频进度) / 总视频数
-            const totalProgress = ((completed + currentVideoProgress) / total) * 100;
-            
-            updateProgress(totalProgress, `正在导出 ${completed + 1}/${total}: ${item.fileName} (${Math.round(pct)}%)`);
-        };
+    try {
+        for (const item of state.videoResults) {
+            const annotations = Array.isArray(item.annotations) ? item.annotations : [];
+            if (!(item.file instanceof Blob)) {
+                manifest.errors.push({ fileName: item.fileName, message: '缺少原始视频文件' });
+                completed += 1;
+                continue;
+            }
+            if (!annotations.length) {
+                unmarkedFolder.file(item.fileName, item.file);
+                manifest.videos.push({ fileName: item.fileName, status: 'no_annotations_original_preserved' });
+                completed += 1;
+                updateProgress((completed / total) * 100, `已保留无标注原视频：${item.fileName}`);
+                continue;
+            }
 
-        els.statusMsg.textContent = `正在渲染并导出视频 ${completed + 1}/${total}: ${item.fileName}`;
-        
-        try {
-            const videoBlob = await exportTaggedVideo(item, onProgress);
-            // 默认导出为 webm 格式，兼容性最好
-            const ext = videoBlob.type.includes('mp4') ? '.mp4' : '.webm';
-            const outName = item.fileName.substring(0, item.fileName.lastIndexOf('.')) + '_tagged' + ext;
-            folder.file(outName, videoBlob);
-        } catch (e) {
-            console.error(`Export failed for ${item.fileName}`, e);
-            els.statusMsg.textContent = `导出失败: ${item.fileName}`;
+            const onProgress = pct => {
+                const totalProgress = ((completed + pct / 100) / total) * 100;
+                updateProgress(totalProgress, `正在导出 ${completed + 1}/${total}：${item.fileName} · ${Math.round(pct)}%`);
+            };
+            els.statusMsg.textContent = `正在渲染标记视频 ${completed + 1}/${total}：${item.fileName}`;
+            try {
+                const exportItem = { ...item, annotations: assignTrackIds(annotations) };
+                const videoBlob = await exportTaggedVideo(exportItem, onProgress);
+                const ext = videoBlob.type.includes('mp4') ? '.mp4' : '.webm';
+                const outName = `${String(item.fileName).replace(/\.[^.]+$/, '')}_tagged${ext}`;
+                folder.file(outName, videoBlob);
+                manifest.videos.push({ fileName: item.fileName, output: outName, status: 'tagged', annotations: annotations.length });
+            } catch (error) {
+                console.error(`Export failed for ${item.fileName}`, error);
+                manifest.errors.push({ fileName: item.fileName, message: String(error?.message || error) });
+            }
+            completed += 1;
         }
-        
-        completed++;
+
+        if (!manifest.videos.length) throw new Error(`没有视频成功导出：${manifest.errors[0]?.message || '未知错误'}`);
+        zip.file('video_render_manifest.json', JSON.stringify(manifest, null, 2));
+        els.statusMsg.textContent = '正在打包视频导出结果...';
+        const blob = await zip.generateAsync({ type: 'blob' }, metadata => {
+            updateProgress(metadata.percent || 0, `正在打包：${Math.round(metadata.percent || 0)}%`);
+        });
+        await saveGeneratedZip(blob, `videos_tagged_tracked_${Date.now()}.zip`, {
+            title: '标记视频导出完成',
+            message: `已处理 ${manifest.videos.length} 个视频。`,
+            note: manifest.errors.length
+                ? `${manifest.errors.length} 个视频失败，详情已写入 video_render_manifest.json；无标注原视频也不会丢失。`
+                : '无标注视频已作为原文件保留，导出清单已一并写入。'
+        });
+    } finally {
+        els.progress.box.classList.add('hidden');
     }
-
-    els.statusMsg.textContent = '正在打包所有视频...';
-    updateProgress(100, '正在打包...');
-    const blob = await zip.generateAsync({ type: 'blob' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `videos_tagged_tracked_${Date.now()}.zip`;
-    a.click();
-    
-    els.statusMsg.textContent = '所有视频导出完成';
-    els.progress.box.classList.add('hidden'); // 隐藏进度条
 }
 
 // --- 追踪与导出辅助函数 ---
@@ -2749,26 +3040,66 @@ function getDistance(box1, box2) {
 }
 
 function exportTaggedVideo(item, onProgress) {
-    return new Promise(async (resolve, reject) => {
+    return new Promise((resolve, reject) => {
         const video = document.createElement('video');
         video.muted = true;
-        video.src = URL.createObjectURL(item.file);
+        const objectUrl = URL.createObjectURL(item.file);
+        video.src = objectUrl;
         video.crossOrigin = "anonymous";
-        video.playsInline = true; // 关键：防止全屏
-        
-        await new Promise(r => video.onloadedmetadata = r);
+        video.playsInline = true;
+        let settled = false;
+        let outputStream = null;
+        let sourceStream = null;
+        let recorder = null;
+        let animationFrameId = null;
+        const cleanup = () => {
+            if (animationFrameId !== null) {
+                cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
+            }
+            try { video.pause(); } catch {}
+            outputStream?.getTracks?.().forEach(track => track.stop());
+            sourceStream?.getTracks?.().forEach(track => track.stop());
+            URL.revokeObjectURL(objectUrl);
+            video.removeAttribute('src');
+            try { video.load(); } catch {}
+            video.remove();
+        };
+        const fail = error => {
+            if (settled) return;
+            settled = true;
+            try {
+                if (recorder?.state && recorder.state !== 'inactive') recorder.stop();
+            } catch {}
+            cleanup();
+            reject(error instanceof Error ? error : new Error(String(error || '视频导出失败')));
+        };
+
+        const run = async () => {
+            await new Promise((resolveMetadata, rejectMetadata) => {
+                video.onloadedmetadata = resolveMetadata;
+                video.onerror = () => rejectMetadata(new Error(`无法读取视频：${item.fileName}`));
+            });
         
         const width = video.videoWidth;
         const height = video.videoHeight;
         const duration = video.duration;
+        if (!width || !height || !Number.isFinite(duration) || duration <= 0) {
+            throw new Error(`视频元数据无效：${item.fileName}`);
+        }
         
         const canvas = document.createElement('canvas');
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d');
+        if (!ctx || typeof canvas.captureStream !== 'function') {
+            throw new Error('当前运行环境不支持标记视频导出');
+        }
         
         // 30fps 录制
-        const stream = canvas.captureStream(30);
+        outputStream = canvas.captureStream(30);
+        sourceStream = typeof video.captureStream === 'function' ? video.captureStream() : null;
+        sourceStream?.getAudioTracks?.().forEach(track => outputStream.addTrack(track));
         
         // 优先使用 MP4 格式
         let mimeType = 'video/webm';
@@ -2778,17 +3109,18 @@ function exportTaggedVideo(item, onProgress) {
             mimeType = 'video/webm;codecs=vp9';
         }
         
-        const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: 5000000 }); // 5Mbps
+        recorder = new MediaRecorder(outputStream, { mimeType, videoBitsPerSecond: 5000000 }); // 5Mbps
         const chunks = [];
         recorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-        
+        recorder.onerror = event => fail(event.error || new Error('视频编码器发生错误'));
         recorder.onstop = () => {
+            if (settled) return;
+            settled = true;
             const blob = new Blob(chunks, { type: mimeType });
-            resolve(blob);
+            cleanup();
+            if (!blob.size) reject(new Error('视频编码结果为空'));
+            else resolve(blob);
         };
-        
-        recorder.start();
-        video.play();
         
         // 预处理：按 trackId 分组并排序
         const tracks = {}; // trackId -> [sorted annotations]
@@ -2803,10 +3135,12 @@ function exportTaggedVideo(item, onProgress) {
         const trackHistory = {}; // trackId -> [{x, y}]
         
         const drawFrame = () => {
-            if (video.paused || video.ended) {
-                recorder.stop();
-                return;
-            }
+            try {
+                if (video.ended) {
+                    if (recorder.state !== 'inactive') recorder.stop();
+                    return;
+                }
+                if (video.paused) return;
             
             // 绘制视频帧
             ctx.drawImage(video, 0, 0, width, height);
@@ -2879,72 +3213,82 @@ function exportTaggedVideo(item, onProgress) {
                  drawStyledAnnotation(ctx, ann, width, height);
             });
             
-            requestAnimationFrame(drawFrame);
+                animationFrameId = requestAnimationFrame(drawFrame);
+            } catch (error) {
+                fail(error);
+            }
         };
-        
+
+        // 先确认媒体能够播放，再启动编码器和绘制循环，避免生成空文件。
+        await video.play();
+        recorder.start();
         drawFrame();
+        };
+        run().catch(fail);
     });
 }
 // [新增] 批量抽帧函数
 async function batchExtractFrames() {
     if (!state.files || state.files.length === 0) return;
-    
-    // UI状态：锁定按钮
+
     state.isProcessing = true;
-    els.startBtn.disabled = true; 
-    els.startBtn.classList.remove('bg-indigo-600', 'hover:bg-indigo-700');
-    els.startBtn.classList.add('bg-gray-400', 'cursor-not-allowed');
+    window.TaskManager?.startTaskLifecycle?.();
     els.progress.box.classList.remove('hidden');
-    
     let completed = 0;
+    let failed = 0;
     const total = state.files.length;
-    
     const fpsInput = $('frameRate');
-    let targetFps = fpsInput ? parseFloat(fpsInput.value || '1') : 1;
-    
-    for (let i = 0; i < total; i++) {
-        const file = state.files[i];
-        
-        let frames = [];
-        let currentFps = targetFps;
-        
-        const existingResult = state.videoResults.find(r => r.fileName === file.name);
-        if (existingResult && existingResult.fps) {
-            currentFps = existingResult.fps;
-            if(fpsInput) fpsInput.value = currentFps;
+    const requestedFps = els.manualFrame?.checked && fpsInput ? parseFloat(fpsInput.value || '1') : 1;
+    let stopped = false;
+
+    try {
+        for (let i = 0; i < total; i++) {
+            if (window.TaskManager?.isStopped) break;
+            const file = state.files[i];
+            const existingResult = state.videoResults.find(result => result.fileName === file.name);
+            const currentFps = Number(existingResult?.fps || requestedFps || 1);
+            if (existingResult?.fps && fpsInput) fpsInput.value = String(currentFps);
+            const onFrameProgress = fileProgress => {
+                const totalPct = ((completed + fileProgress) / total) * 100;
+                updateProgress(totalPct, `正在抽帧 ${i + 1}/${total}：${file.name} · ${Math.round(fileProgress * 100)}%`);
+            };
+
+            const video = document.createElement('video');
+            const objectUrl = URL.createObjectURL(file);
+            video.src = objectUrl;
+            try {
+                await new Promise((resolve, reject) => {
+                    video.onloadedmetadata = resolve;
+                    video.onerror = () => reject(new Error(`无法读取视频：${file.name}`));
+                });
+                const frames = await extractFrames(video, currentFps, onFrameProgress);
+                if (window.TaskManager?.isStopped) break;
+                if (!frames.length) throw new Error(`没有从 ${file.name} 提取到可用帧`);
+                state.videoFramesCache.set(file.name, { frames, fps: currentFps });
+                completed += 1;
+            } catch (error) {
+                failed += 1;
+                recordVideoProcessingError(file, `抽帧失败：${String(error?.message || error)}`);
+            } finally {
+                URL.revokeObjectURL(objectUrl);
+                video.remove();
+            }
         }
-
-        // 定义细粒度进度回调
-        const onFrameProgress = (fileProgress) => {
-             // 总进度 = (已完成视频数 + 当前视频解码比例) / 总视频数
-             const totalPct = ((completed + fileProgress) / total) * 100;
-             updateProgress(totalPct, `正在抽帧 (${i+1}/${total}): ${file.name} - ${Math.round(fileProgress * 100)}%`);
-        };
-        
-        onFrameProgress(0); // 初始化进度显示
-
-        const video = document.createElement('video');
-        video.src = URL.createObjectURL(file);
-        await new Promise(r => video.onloadedmetadata = r);
-        
-        // 传入回调函数
-        frames = await extractFrames(video, currentFps, onFrameProgress);
-        
-        URL.revokeObjectURL(video.src);
-        video.remove();
-        
-        state.videoFramesCache.set(file.name, { frames, fps: currentFps });
-        completed++;
+        stopped = Boolean(window.TaskManager?.isStopped);
+        state.videoAnalysisReady = !stopped && completed + failed === total && completed > 0;
+        if (state.videoAnalysisReady) {
+            updateProgress(100, `抽帧完成：成功 ${completed} 个 · 失败 ${failed} 个，请开始分析`);
+            els.btnText.textContent = '开始分析';
+        } else {
+            els.statusMsg.textContent = `抽帧已停止：完成 ${completed}/${total}，可继续抽帧`;
+            els.btnText.textContent = '继续抽帧';
+        }
+        return { completed, failed, stopped };
+    } finally {
+        state.isProcessing = false;
+        window.TaskManager?.endTaskLifecycle?.();
+        els.startBtn.disabled = false;
     }
-    
-    updateProgress(100, '所有视频抽帧完成，请开始分析');
-    state.isProcessing = false;
-    state.videoAnalysisReady = true;
-    
-    els.startBtn.disabled = false;
-    els.startBtn.classList.remove('bg-gray-400', 'cursor-not-allowed');
-    els.startBtn.classList.add('bg-indigo-600', 'hover:bg-indigo-700');
-    els.btnText.textContent = "开始分析"; 
 }
 
 
