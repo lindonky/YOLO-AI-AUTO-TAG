@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Run the UI demo without PowerShell, an installer, or a hidden process."""
+"""Serve the main workspace or review demo in the default browser."""
 
 from __future__ import annotations
 

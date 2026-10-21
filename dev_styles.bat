@@ -1,5 +1,6 @@
 @echo off
-title Tailwind CSS Auto Compiler
+cd /d "%~dp0"
+title YOLO Auto-Tag Styles
 
 echo.
 echo ==========================================
@@ -20,9 +21,9 @@ if not exist "tailwindcss.exe" (
 )
 
 echo [INFO] Starting Watch Mode...
-echo [INFO] Edit your input.css or HTML files to trigger updates.
+echo [INFO] Edit src/input.css, HTML or JavaScript to rebuild styles.
 echo [INFO] Do NOT close this window.
 echo.
 
 :: Run the command
-tailwindcss.exe -i input.css -o style.css --watch
+tailwindcss.exe -i src/input.css -o style.css --watch

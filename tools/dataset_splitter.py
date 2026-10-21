@@ -1,3 +1,5 @@
+"""Split a YOLO image/label dataset into training and validation sets."""
+
 import os
 import shutil
 import threading

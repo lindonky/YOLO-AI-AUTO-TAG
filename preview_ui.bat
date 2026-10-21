@@ -6,7 +6,7 @@ cd /d "%~dp0"
 where python.exe >nul 2>nul
 if errorlevel 1 (
     echo [ERROR] Python was not found in PATH.
-    echo Install Python or use the later unpacked EXE preview.
+    echo Install Python and try again.
     echo.
     pause
     exit /b 1
@@ -17,7 +17,7 @@ set "PREVIEW_EXIT=%ERRORLEVEL%"
 if not "%PREVIEW_EXIT%"=="0" (
     echo.
     echo [ERROR] Preview failed with exit code %PREVIEW_EXIT%.
-    echo Please copy the error text above and send it to Codex.
+    echo Review the error output above.
     pause
 )
 endlocal
