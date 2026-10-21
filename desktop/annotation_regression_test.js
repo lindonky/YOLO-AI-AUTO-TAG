@@ -32,22 +32,23 @@ function extract(name) {
     const rest=source.slice(start),next=rest.slice(1).search(/\n(?:async )?function /);
     return next<0?rest:rest.slice(0,next+1);
 }
-async function pipeline(contents, review=true) {
+async function pipeline(contents, review=true, stopAfterDetection=false) {
     const queue=contents.slice(); const requests=[];
     const canvas={width:640,height:480,getContext:()=>({drawImage(){}}),toDataURL:()=> 'data:image/jpeg;base64,TEST'};
-    const ctx={AnnotationCore:core,performance,
+    const ctx={AnnotationCore:core,performance,window:{},document:{createElement:()=>canvas},waitForTaskDelay:async()=>{},
         state:{teachingExamples:[],unifiedClassMap:new Map([[labels[0],0]]),nextClassId:1},
         els:{promptInput:{value:'检测四类几何体'},classLabelInput:{value:labels.join(' ')},verifyDetections:{checked:review},extractTransparent:{checked:false},exportCanvas:canvas},
         createAnalysisCanvas:()=>canvas,
         fetchAPIWithRetry:async(_config,messages)=>{
             requests.push(messages);
             assert.ok(queue.length,'unexpected API call');
+            if(stopAfterDetection)ctx.window.TaskManager={isStopped:true};
             return JSON.stringify({choices:[{finish_reason:'stop',message:{content:queue.shift()}}]});
         }
     };
     vm.createContext(ctx);
-    for(const name of ['getRequestedClassNames','buildTaskClassInstruction','getClassId','getAllClasses','buildTeachingMessages','parseModelJsonContent','callAPIJson','callAPI','verifyTargetPresence','reviewDetectionCompleteness','processImageTwoStage'])vm.runInContext(extract(name),ctx);
-    const result=await ctx.processImageTwoStage({},false,{width:640,height:480,naturalWidth:640,naturalHeight:480},false);
+    for(const name of ['getRequestedClassNames','buildTaskClassInstruction','getClassId','getAllClasses','buildTeachingMessages','buildTaskTeachingMessages','assertTaskNotStopped','parseModelJsonContent','callAPIJson','callAPI','verifyTargetPresence','reviewDetectionCompleteness','processImageTwoStage'])vm.runInContext(extract(name),ctx);
+    const result=await ctx.processImageTwoStage({model:'test-actual-model'},false,{width:640,height:480,naturalWidth:640,naturalHeight:480},false);
     return {result,requests,ctx};
 }
 (async()=>{
@@ -55,8 +56,13 @@ async function pipeline(contents, review=true) {
     assert.equal(reviewed.result.boxes.length,2);
     assert.equal(reviewed.result.validation.needsReview,false);
     assert.equal(reviewed.result.validation.confidence,null);
+    assert.deepEqual([...reviewed.result.validation.modelsUsed],['test-actual-model']);
+    assert.equal(reviewed.result.boxes[0].model_used,'test-actual-model');
     assert.equal(reviewed.requests.length,2);
     assert.equal(reviewed.ctx.state.unifiedClassMap.size,4);
+    const uncertain=await pipeline([JSON.stringify([green]),JSON.stringify({missing_objects:[black],complete:false,reason:'仍无法确认边缘是否还有目标'})]);
+    assert.equal(uncertain.result.boxes.length,2);assert.equal(uncertain.result.validation.needsReview,true);
+    assert.equal(uncertain.result.validation.completenessReview.status,'uncertain');assert.equal(uncertain.result.validation.jsonRetries,0);
     const prompt=reviewed.requests[0][0].content[0].text;
     labels.forEach(label=>assert.ok(prompt.includes(label)));
     const failed=await pipeline([JSON.stringify([green]),'review response is broken']);
@@ -70,5 +76,14 @@ async function pipeline(contents, review=true) {
     assert.equal(suspicious.result.validation.needsReview,true);
     const disabled=await pipeline([final],false);
     assert.equal(disabled.requests.length,1);
+    await assert.rejects(()=>pipeline(['invalid JSON'],false),error=>error.modelsUsed[0]==='test-actual-model');
+    const stopped=await pipeline([final],true,true);
+    assert.equal(stopped.requests.length,1);
+    assert.equal(stopped.result.boxes.length,2);
+    assert.equal(stopped.result.validation.status,'stopped_pending_review');
+    assert.equal(stopped.result.validation.needsReview,true);
+    const stoppedEmpty=await pipeline(['[]'],true,true);
+    assert.equal(stoppedEmpty.requests.length,1);
+    assert.equal(stoppedEmpty.result.validation.verifiedEmpty,false);
     console.log('Annotation parser, class mapping, missing-target review and empty-result regressions: passed');
 })().catch(error=>{console.error(error);process.exitCode=1});

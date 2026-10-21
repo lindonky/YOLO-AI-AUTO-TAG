@@ -1,7 +1,7 @@
 作者声明
 
 软件名称：YOLO Auto-Tag
-版本：V1.1
+版本：V1.2.7
 作者：粥沫鱼块
 邮箱：2093880845@qq.com
 项目仓库：https://github.com/lindonky/YOLO-AI-AUTO-TAG

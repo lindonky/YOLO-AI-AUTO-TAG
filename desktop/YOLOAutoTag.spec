@@ -75,10 +75,17 @@ exe = EXE(
     icon=str(root / 'assets' / 'app_icon.ico'),
 )
 
+control = Analysis([str(root / 'mcp_bridge.py')],pathex=[str(root)],binaries=extra_binaries,datas=[],hiddenimports=[],excludes=['tkinter','pytest','numpy','cv2'],optimize=1)
+control_pyz = PYZ(control.pure)
+control_exe = EXE(control_pyz,control.scripts,[],exclude_binaries=True,name='YOLOAutoTagMCP',console=True,upx=True,version=str(root / 'version_info.txt'),icon=str(root / 'assets' / 'app_icon.ico'))
+
 coll = COLLECT(
     exe,
+    control_exe,
     a.binaries,
     a.datas,
+    control.binaries,
+    control.datas,
     strip=False,
     upx=True,
     upx_exclude=[],

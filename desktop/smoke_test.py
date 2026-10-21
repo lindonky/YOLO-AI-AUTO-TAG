@@ -89,7 +89,7 @@ def main() -> None:
             store.update(
                 {
                     "api_url": base + "/v1/chat/completions",
-                    "api_key": "",
+                    "api_key": FAKE_KEY,
                     "model": "gemini-3.6-flash",
                     "proxy_url": "",
                 }

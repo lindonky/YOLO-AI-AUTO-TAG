@@ -28,10 +28,16 @@ def copy_frontend() -> None:
         "index.html",
         "main.js",
         "annotation_core.js",
+        "review_state.js",
+        "annotation_catalog.js",
+        "annotation_editor.js",
+        "workspace_controls.js",
+        "result_inspector.js",
         "task_manager.js",
         "review_workspace.js",
         "style.css",
         "review_workspace.css",
+        "annotation_editor.css",
         "desktop_ui.css",
         "app_icon.png",
     ):
@@ -39,6 +45,8 @@ def copy_frontend() -> None:
     shutil.copytree(PROJECT_ROOT / "libs", WEB_ROOT / "libs")
     shutil.copy2(DESKTOP_ROOT / "assets" / "config.desktop.js", WEB_ROOT / "config.js")
     shutil.copy2(DESKTOP_ROOT / "assets" / "desktop_config.js", WEB_ROOT / "desktop_config.js")
+    shutil.copy2(DESKTOP_ROOT / "assets" / "connection_recovery.js", WEB_ROOT / "connection_recovery.js")
+    shutil.copy2(DESKTOP_ROOT / "assets" / "automation_ui.js", WEB_ROOT / "automation_ui.js")
 
 
 def patch_desktop_index() -> None:
@@ -46,8 +54,9 @@ def patch_desktop_index() -> None:
     content = index_path.read_text(encoding="utf-8")
     config_pattern = re.compile(r'<script\s+src="config\.js[^"\n]*"></script>')
     replacement = (
-        '<script src="config.js?v=desktop-1.1"></script>\n'
-        '<script src="desktop_config.js?v=desktop-1.1-error-export1"></script>'
+        '<script src="config.js?v=desktop-1.2.7"></script>\n'
+        '<script src="desktop_config.js?v=desktop-1.2.7-error-export1"></script>\n'
+        '<script src="connection_recovery.js?v=desktop-1.2.7"></script>'
     )
     content, count = config_pattern.subn(replacement, content, count=1)
     if count != 1:
@@ -64,6 +73,7 @@ def patch_desktop_index() -> None:
             '<script src="https://docs.opencv.org/4.x/opencv.js"></script>',
             '<script src="libs/opencv/opencv.js"></script>',
         )
+    content = content.replace('</body>', '<script src="automation_ui.js?v=1.2.7"></script>\n</body>')
     index_path.write_text(content, encoding="utf-8")
 
 

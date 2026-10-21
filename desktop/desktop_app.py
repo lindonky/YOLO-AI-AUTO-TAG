@@ -82,8 +82,8 @@ def resource_root() -> Path:
     return Path(__file__).resolve().parent / "build_assets"
 
 
-def setup_logging() -> None:
-    log_dir = settings_dir() / "logs"
+def setup_logging(root=None) -> None:
+    log_dir = (root or settings_dir()) / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         filename=log_dir / "desktop.log",
@@ -133,10 +133,12 @@ def webview2_version() -> str:
 def main() -> int:
     if len(sys.argv) == 3 and sys.argv[1] in {'--self-test', '--self-test-ui'}:
         return run_self_test(Path(sys.argv[2]), with_ui=sys.argv[1] == '--self-test-ui')
-    setup_logging()
+    session=Path(sys.argv[2]).resolve() if len(sys.argv)==3 and sys.argv[1]=='--automation-session' else None
+    if session:session.mkdir(parents=True,exist_ok=True)
+    setup_logging(session)
     logging.info("Starting %s %s", APP_NAME, APP_VERSION)
-    mutex = acquire_single_instance_mutex()
-    if mutex is None:
+    mutex = acquire_single_instance_mutex() if session is None else None
+    if mutex is None and session is None:
         return 0
 
     server = None
@@ -157,8 +159,12 @@ def main() -> int:
             show_message(APP_NAME, f"应用资源缺失：{web_root / 'index.html'}", 0x10)
             return 3
 
-        settings_store = SettingsStore()
+        settings_store = SettingsStore(session/'settings.json') if session else SettingsStore()
+        if session and not settings_store.path.exists():settings_store.update(SettingsStore().runtime())
         server = create_server(web_root, settings_store, port=0)
+        from automation import AutomationService
+        server.automation=AutomationService(server,(session or settings_dir())/'automation.json')
+        server.journal.path=(session or settings_dir())/'logs'/'requests.jsonl'
         port = int(server.server_address[1])
         server_thread = threading.Thread(
             target=server.serve_forever,
@@ -169,7 +175,7 @@ def main() -> int:
         logging.info("Loopback server started on port %s", port)
 
         url = f"http://127.0.0.1:{port}/index.html?desktop=1&version={APP_VERSION}"
-        webview.create_window(
+        app_window=webview.create_window(
             WINDOW_TITLE,
             url=url,
             js_api=DesktopApi(server),
@@ -178,7 +184,12 @@ def main() -> int:
             min_size=(1080, 680),
             confirm_close=False,
             text_select=True,
+            hidden=bool(session),
         )
+        def wake_control():
+            try:app_window.evaluate_js('void window.AutoTagAutomation?.tick()')
+            except Exception:pass
+        server.automation.wake_ui=wake_control
         debug = os.environ.get("YOLO_AUTOTAG_DESKTOP_DEBUG", "0") == "1"
         webview.start(gui="edgechromium", debug=debug)
         return 0
@@ -194,11 +205,12 @@ def main() -> int:
     finally:
         if server is not None:
             try:
+                server.automation.close()
                 server.shutdown()
                 server.server_close()
             except Exception:
                 logging.exception("Failed to stop loopback server cleanly")
-        ctypes.windll.kernel32.CloseHandle(mutex)
+        if mutex:ctypes.windll.kernel32.CloseHandle(mutex)
 
 
 def run_self_test(output: Path, with_ui: bool = False) -> int:
@@ -219,7 +231,7 @@ def run_self_test(output: Path, with_ui: bool = False) -> int:
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             base = f'http://127.0.0.1:{server.server_address[1]}'
-            for name in ['index.html', 'annotation_core.js', 'main.js', 'desktop_config.js']:
+            for name in ['index.html', 'annotation_core.js', 'main.js', 'desktop_config.js','result_inspector.js','connection_recovery.js']:
                 with urlopen(base + '/' + name, timeout=5) as response:
                     if response.status != 200 or not response.read():
                         raise RuntimeError('Missing packaged asset: ' + name)
@@ -244,9 +256,23 @@ def run_self_test(output: Path, with_ui: bool = False) -> int:
                             time.sleep(0.1)
                         else:
                             raise RuntimeError('Packaged application scripts did not initialize')
-                        if not window.evaluate_js("Boolean(document.getElementById('teachingLabelSelect') && document.getElementById('verifyDetections') && window.pywebview.api.choose_task_export_path)"):
+                        if not window.evaluate_js("Boolean(document.getElementById('teachingLabelSelect') && document.getElementById('verifyDetections') && document.getElementById('desktopAutoModel') && document.getElementById('desktopModelProbe') && document.getElementById('desktopMaxConcurrency') && window.pywebview.api.choose_task_export_path)"):
                             raise RuntimeError('Packaged controls or native export bridge missing')
                         result['webview2_page_initialized'] = True
+                        if not window.evaluate_js("Boolean(window.AutoTagAutomation && window.ResultInspector && typeof window.AppConfigManager.executeWithRecovery === 'function' && document.getElementById('timelineSearch') && document.getElementById('timelineSort') && document.getElementById('readImageNumbers'))"):
+                            raise RuntimeError('Result inspector or recovery controls missing')
+                        result['result_inspector_and_recovery_initialized'] = True
+                        if not window.evaluate_js("Boolean(document.getElementById('desktopDeepSeekPreset') && document.getElementById('desktopProfile') && document.getElementById('desktopProtocol') && document.getElementById('desktopMaxRetries'))"):
+                            raise RuntimeError('Provider and retry controls missing')
+                        result['provider_and_retry_controls_initialized'] = True
+                        if not window.evaluate_js("Boolean(window.ReviewState && window.AnnotationDisplay && window.RequestStatus && document.getElementById('taskWorkbenchBtn') && document.getElementById('annotationLabelsBtn') && document.getElementById('annotationVisibilityBtn') && document.getElementById('requestStatsPanel'))"):
+                            raise RuntimeError('Task workbench or display controls missing')
+                        settings_visible=window.evaluate_js("(() => { window.toggleDropdown('settingsMenu'); const panel=document.getElementById('settingsMenu'); const rect=panel.getBoundingClientRect(); const valid=panel.parentElement===document.body && rect.height>300 && document.getElementById('modelSelect').getBoundingClientRect().top<innerHeight; window.toggleDropdown('settingsMenu'); return valid; })()")
+                        if not settings_visible:raise RuntimeError('Settings panel collapsed or outside viewport')
+                        result['workbench_display_and_settings_initialized'] = True
+                        if not window.evaluate_js("Boolean(window.AnnotationEditor && window.TaskClasses && typeof window.ReviewState.validGeometry === 'function' && document.getElementById('manualAnnotateBtn') && document.querySelector('[data-ae-tool=draw]') && document.querySelector('[data-ae-undo]') && document.querySelector('[data-ae-class-list]'))"):
+                            raise RuntimeError('Manual annotation editor or global class controls missing')
+                        result['annotation_editor_and_classes_initialized'] = True
                     except Exception as exc:
                         ui_errors.append(str(exc))
                     finally:

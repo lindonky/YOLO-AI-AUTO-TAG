@@ -30,6 +30,7 @@ async function main() {
     vm.createContext(context);
     vm.runInContext(`${source}\n;globalThis.__TaskManager = TaskManager;`, context);
     const manager = context.__TaskManager;
+    assert.equal(context.window.TaskManager,manager);
     manager.startTaskLifecycle = () => {
         manager.isStopped = false;
         manager.isPaused = false;
@@ -84,6 +85,33 @@ async function main() {
     assert.equal(videoSummary.failed, 1);
     assert.equal(videoSummary.skipped, 0);
     assert.match(videoSummary.errors[0].message, /mock video failure/);
+
+    // A terminal selection failure stops the batch and retains unattempted images.
+    context.state.isVideoMode = false;
+    const retained = [];
+    context.recordImageProcessingError = (item, reason) => retained.push({ name: item.name, reason });
+    const fatalSummary = await manager.runWithConcurrencyOverride(
+        [{ name: 'first.jpg' }, { name: 'second.jpg' }, { name: 'third.jpg' }],
+        async () => { const error = new Error('no available model'); error.fatal = true; throw error; },
+        1
+    );
+    assert.equal(fatalSummary.attempted, 1);
+    assert.equal(fatalSummary.failed, 3);
+    assert.equal(retained.length, 2);
+    assert.equal(fatalSummary.stopped, false);
+
+    retained.length = 0;
+    const visited = [];
+    const stoppedSummary = await manager.runWithConcurrencyOverride(
+        [{ name: 'one.jpg' }, { name: 'two.jpg' }, { name: 'three.jpg' }],
+        async item => { visited.push(item.name); manager.isStopped = true; },
+        1
+    );
+    assert.deepEqual(visited, ['one.jpg']);
+    assert.equal(stoppedSummary.stopped, true);
+    assert.equal(stoppedSummary.unprocessed, 2);
+    assert.equal(stoppedSummary.failed, 0);
+    assert.deepEqual(retained.map(r => r.name), ['two.jpg', 'three.jpg']);
     console.log('Desktop JavaScript image/video batch-failure smoke test: passed');
 }
 

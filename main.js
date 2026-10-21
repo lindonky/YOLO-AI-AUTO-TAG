@@ -19,7 +19,7 @@ const els = {
     quickTeachingBtn: $('quickTeachingBtn'), quickTeachingText: $('quickTeachingText'), quickTeachingCount: $('quickTeachingCount'),
     teachingFloatingToolbar: $('teachingFloatingToolbar'), teachingFloatingStatus: $('teachingFloatingStatus'),
     saveTeachingFloatingBtn: $('saveTeachingFloatingBtn'), undoTeachingFloatingBtn: $('undoTeachingFloatingBtn'), exitTeachingFloatingBtn: $('exitTeachingFloatingBtn'),
-    extractTransparent: $('extractTransparent'),
+    extractTransparent: $('extractTransparent'), readImageNumbers: $('readImageNumbers'),
     exportAllTransparentBtn: $('exportAllTransparentBtn'), exportAllCropBtn: $('exportAllCropBtn'), exportAllTaggedVideosBtn: $('exportAllTaggedVideosBtn'),
     exportBatchImageLabelsBtn: $('exportBatchImageLabelsBtn'), exportBatchVideoFramesBtn: $('exportBatchVideoFramesBtn'),
     imageCanvas: $('imageCanvas'),
@@ -39,6 +39,9 @@ const els = {
 };
 // Expose els to global scope for TaskManager
 window.els = els;
+// Fixed panels belong to the viewport, outside the header's backdrop-filter
+// containing block. Keeping settings inside it collapsed the panel to 28 px.
+if (els.settingsMenu) document.body.appendChild(els.settingsMenu);
 
 // --- Panel Manager (Z-Index) ---
 const PanelManager = {
@@ -272,6 +275,7 @@ window.toggleDropdown = function(id, options = {}) {
 
 // 兼容旧调用
 window.toggleExportMenu = () => window.toggleDropdown('fileMenu');
+document.getElementById('settingsCloseBtn')?.addEventListener('click', () => setDropdownOpen('settingsMenu', false, { restoreFocus: true }));
 
 // 点击其他地方关闭所有下拉菜单
 document.addEventListener('click', function(e) {
@@ -337,6 +341,7 @@ Object.entries(DROPDOWNS).forEach(([menuId, config]) => {
 
 document.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
+    if (document.querySelector('dialog[open]')) return;
     if (openDropdownId) {
         const closingId = openDropdownId;
         event.preventDefault();
@@ -538,13 +543,6 @@ function toggleMode() {
     if (state.isVideoMode && state.teachingMode) setTeachingMode(false);
     if (els.quickTeachingBtn) els.quickTeachingBtn.classList.toggle('hidden', state.isVideoMode);
     els.modeLabel.textContent = state.isVideoMode ? '当前: 视频模式' : '当前: 图片模式';
-    const brandGlyph = $('appBrandGlyph');
-    if (brandGlyph) {
-        brandGlyph.setAttribute('aria-label', state.isVideoMode ? '视频模式' : '图片模式');
-        brandGlyph.innerHTML = state.isVideoMode
-            ? '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l5-2.5v9L15 14M5 6h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z"/></svg>'
-            : '<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 17l4.5-4.5 3 3L15 12l5 5M6 20h12a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Zm9-11h.01"/></svg>';
-    }
     els.fileInput.accept = state.isVideoMode ? 'video/*' : 'image/*';
     els.videoOptions.classList.toggle('hidden', !state.isVideoMode);
 
@@ -846,15 +844,15 @@ function createAnalysisCanvas(sourceImage) {
     return canvas;
 }
 
-function buildTeachingMessages(currentContent) {
-    const examples = (state.teachingExamples || [])
-        .filter(example => example?.dataUrl && Array.isArray(example.boxes) && example.boxes.length > 0)
+function buildTeachingMessages(currentContent, teachingExamples = state.teachingExamples) {
+    const examples = (teachingExamples || [])
+        .filter(example => example?.dataUrl && Array.isArray(example.boxes) && example.boxes.some(ReviewState.validBox))
         .sort((a, b) => (a.updatedAt || 0) - (b.updatedAt || 0))
         .slice(-3);
     const messages = [];
 
     examples.forEach((example, index) => {
-        const cleanBoxes = example.boxes.map(box => ({
+        const cleanBoxes = example.boxes.filter(ReviewState.validBox).map(box => ({
             label: box.label,
             box_2d: box.box_2d
         }));
@@ -935,13 +933,16 @@ els.statusMsg.textContent = `已加载 ${state.unifiedClassMap.size} 个自定�
     reader.readAsText(file);
 }
 
+function buildTaskTeachingMessages(config, content) {
+    return buildTeachingMessages(content, config.taskContext?.teachingExamples);
+}
+
 function getRequestedClassNames() {
     const manual = [...new Set((els.classLabelInput.value || '').trim().split(/\s+/).filter(Boolean))];
     return manual.length ? manual : (state.customClassesLoaded ? getAllClasses().filter(Boolean) : []);
 }
 
-function buildTaskClassInstruction(fallbackLabel) {
-    const labels = getRequestedClassNames();
+function buildTaskClassInstruction(fallbackLabel, labels = getRequestedClassNames()) {
     if (labels.length) {
         labels.forEach(label => getClassId(label));
         return `\n本任务全部类别(ID:名称): [${labels.map(label => `${getClassId(label)}:${label}`).join(',')}]。` +
@@ -951,6 +952,8 @@ function buildTaskClassInstruction(fallbackLabel) {
 }
 
 function getClassId(label) {
+    if (typeof label !== 'string' || !label.trim()) return null;
+    label = label.trim();
     if (!state.unifiedClassMap.has(label)) {
         state.unifiedClassMap.set(label, state.nextClassId++);
     }
@@ -980,9 +983,14 @@ function resetImageDisplay() {
 
 // --- 核心分析逻辑 ---
 
+function notifyAnalysis(message) {
+    if (window.AutoTagAutomation?.remoteRun) window.AutoTagAutomation.recordNotice(message);
+    else alert(message);
+}
+
 async function startAnalysis() {
     const hasFiles = (state.files && state.files.length > 0) || !!state.file;
-    if (!hasFiles) return alert('请先上传文件');
+    if (!hasFiles) return notifyAnalysis('请先上传文件');
 
     if (!state.isVideoMode) {
         if (state.teachingDraftDirty) saveTeachingExample(false);
@@ -1014,7 +1022,7 @@ async function startAnalysis() {
                 files.forEach(file => recordImageProcessingError(file, `API 预检失败，未执行识别：${message}`));
             }
             els.statusMsg.textContent = `无法开始分析：${message}`;
-            alert(
+            notifyAnalysis(
                 `无法开始分析\n\n${message}\n\n` +
                 `请在“API 设置”中测试配置，或稍后重试。\n` +
                 (state.isVideoMode
@@ -1026,32 +1034,41 @@ async function startAnalysis() {
         }
     }
 
-    const config = CONFIGS[els.modelSelect.value];
+    if (window.AutoTagAutomation?.cancelStart && window.AutoTagAutomation?.remoteRun) {
+        window.AutoTagAutomation.cancelStart=false;
+        window.ReviewWorkspace?.open?.({reason:'analysis-stopped'});
+        return;
+    }
+    const config = { ...CONFIGS[els.modelSelect.value] };
     setLoading(true);
     els.progress.box.classList.remove('hidden');
+    let reviewReason = null;
 
     try {
+        if (window.AppConfigManager?.beginTask) config.taskId = await window.AppConfigManager.beginTask();
         if (state.isVideoMode) {
             await processVideosBatch(config);
         } else {
             const batchSummary = await processImagesBatch(config);
-            if (batchSummary?.failed > 0) {
+            reviewReason = batchSummary?.stopped ? 'analysis-stopped' : 'analysis-complete';
+            if (batchSummary?.failed > 0 && !batchSummary?.stopped) {
                 const firstError = batchSummary.errors?.[0]?.message || '未知错误';
-                alert(
+                notifyAnalysis(
                     `本次识别成功 ${batchSummary.succeeded} 张，失败 ${batchSummary.failed} 张。\n\n` +
                     `首个错误：${firstError}\n\n` +
                     `失败图片已保留到 error；每张图片仍会导出同名 TXT，修复配置后也可再次分析。`
                 );
             }
-            if ((state.files?.length || 0) > 0 && window.ReviewWorkspace?.open) {
-                window.ReviewWorkspace.open({ reason: 'analysis-complete' });
-            }
         }
     } catch (err) {
         els.statusMsg.textContent = `错误: ${err.message}`;
     } finally {
+        await window.AppConfigManager?.finishTask?.();
         setLoading(false);
         els.progress.box.classList.add('hidden');
+        if (reviewReason && (state.files?.length || 0) > 0) {
+            window.ReviewWorkspace?.open?.({ reason: reviewReason });
+        }
     }
 }
 
@@ -1086,8 +1103,12 @@ function renderAllAnnotations() {
 }
 
 function drawStyledAnnotation(ctx, ann, w, h, rect) {
+    // Visibility is a view preference. Offscreen export canvases always retain
+    // annotations and labels, regardless of what is hidden in the workspace.
+    const display = ctx.canvas === els.overlayCanvas ? window.AnnotationDisplay?.preferences : null;
+    if (display?.annotations === false) return;
     const contentRect = rect || { x: 0, y: 0, w, h, scale: 1 };
-    const hash = ann.label.split('').reduce((a, b) => a + b.charCodeAt(0), 0);
+    const hash = (ann.label || '').split('').reduce((a, b) => a + b.charCodeAt(0), 0);
     const color = `hsl(${hash % 360}, 70%, 50%)`;
 
     ctx.lineWidth = 3;
@@ -1114,13 +1135,13 @@ function drawStyledAnnotation(ctx, ann, w, h, rect) {
     }
     
     // 绘制标签背景
-    if (!ann.box_2d) return;
+    if (!ann.box_2d || display?.labels === false) return;
     ctx.fillStyle = color;
     const labelX = contentRect.x + (ann.box_2d[1]/1000)*contentRect.w;
     const labelY = contentRect.y + (ann.box_2d[0]/1000)*contentRect.h - 25;
-    ctx.fillRect(labelX, labelY, ann.label.length * 10 + 20, 25);
+    ctx.fillRect(labelX, labelY, (ann.label || '未分类').length * 10 + 20, 25);
     ctx.fillStyle = "#fff";
-    ctx.fillText(ann.label, labelX + 5, labelY + 18);
+    ctx.fillText(ann.label || '未分类', labelX + 5, labelY + 18);
 }
 
 function syncTeachingLabelControls() {
@@ -1373,7 +1394,7 @@ function saveTeachingExample(notify = true) {
     const canvas = createAnalysisCanvas(state.img);
     const example = {
         fileName: state.file.name,
-        boxes: JSON.parse(JSON.stringify(state.teachingDraftBoxes)),
+        boxes: JSON.parse(JSON.stringify(state.teachingDraftBoxes.filter(ReviewState.validBox))),
         dataUrl: canvas.toDataURL('image/jpeg', 0.9),
         updatedAt: Date.now()
     };
@@ -1404,107 +1425,22 @@ function clearTeachingExamples() {
 // --- 导出逻辑：时间轴与结果列表 ---
 
 function appendTimelineItem(file, annotations, fileIndex, resultMeta = null) {
-    els.timelineResults.classList.remove('hidden');
-    const fileName = file.name;
-    
-    // 创建文件头
-    const header = document.createElement('div');
-    header.className = 'p-2 bg-gray-100 font-bold text-gray-700 text-xs border-b sticky top-0';
-    const validationNote = resultMeta?.needsReview
-        ? ' · ⚠ 空结果待人工复核'
-        : resultMeta?.verifiedEmpty
-            ? ' · 已复核无目标'
-            : String(resultMeta?.validation?.status || '').startsWith('recovered')
-                ? ' · 空结果复核后已找回'
-                : '';
-    header.innerText = `文件: ${fileName} (${annotations.length} 个目标)${validationNote}`;
-    if (resultMeta?.needsReview) {
-        header.style.color = '#b45309';
-        header.title = resultMeta.validation?.reason || '模型未能确认这是无目标图片';
-    }
-    els.timelineContent.appendChild(header);
-
-    const fragment = document.createDocumentFragment();
-    annotations.forEach((ann, i) => {
-        const div = document.createElement('div');
-        div.className = 'flex items-center justify-between p-3 border-b border-gray-100 hover:bg-gray-50 transition';
-        div.innerHTML = `
-            <div class="cursor-pointer" onclick="restoreAndGoTo(${fileIndex}, ${i})">
-                <span class="text-indigo-600 font-bold">${state.isVideoMode ? ann.time.toFixed(2)+'s' : '#'+(i+1)}</span>
-                <span class="ml-2 font-medium">${ann.label}</span>
-            </div>
-            <div class="flex gap-2">
-                ${ann.previewDataUrl ? `<img src="${ann.previewDataUrl}" alt="预览" class="w-16 h-16 object-cover rounded border" />` : ''}
-                ${ann.transparentPreviewUrl ? `<img src="${ann.transparentPreviewUrl}" alt="透明预览" class="w-16 h-16 object-contain rounded border" />` : ''}
-            </div>
-        `;
-        fragment.appendChild(div);
-    });
-    els.timelineContent.appendChild(fragment);
+    window.ResultInspector?.schedule();
 }
 
-// 替换原来的 renderTimeline
 function renderTimeline(data) {
-    // 此函数保留用于单文件模式或视频模式的内部刷新，但在多文件批处理中应使用 appendTimelineItem
-    // 为了兼容，如果调用此函数，我们假设是当前 state.file
-    if (!state.file) return;
-    // 清空内容? 不，我们现在的逻辑是累加。
-    // 如果是视频分析过程中的实时更新，可能需要清空？
-    // 视频分析是逐步的，我们暂时保持视频分析的原有逻辑（它目前是全量更新 state.annotations）
-    if (state.isVideoMode) {
-        els.timelineResults.classList.remove('hidden');
-        els.timelineContent.innerHTML = data.map((ann, index) => `
-        <div class="flex items-center justify-between p-3 border-b border-gray-100 hover:bg-gray-50 transition">
-            <div class="cursor-pointer" onclick="goToAnnotation(${index})">
-                <span class="text-indigo-600 font-bold">${ann.time.toFixed(2)+'s'}</span>
-                <span class="ml-2 font-medium">${ann.label}</span>
-            </div>
-             <div class="flex gap-2">
-                ${ann.previewDataUrl ? `<img src="${ann.previewDataUrl}" alt="预览" class="w-16 h-16 object-cover rounded border" />` : ''}
-            </div>
-        </div>
-        `).join('');
-    }
+    window.ResultInspector?.schedule();
 }
 
-// 新增恢复视图函数
 window.restoreAndGoTo = function(fileIndex, annIndex) {
     const item = state.imageResults[fileIndex];
     if (!item) return;
-
-    const sourceIndex = state.files.findIndex(file =>
-        file === item.file || file.name === item.fileName
-    );
-
-    if (sourceIndex >= 0) {
-        // 统一通过 switchFile 切图，让文件高亮、当前索引、图片和标注保持一致。
-        switchFile(sourceIndex);
-    }
+    const index = state.files.findIndex(f => f === item.file || f.name === item.fileName);
+    if (index >= 0) switchFile(index);
 };
 
 function appendCropGallery(annotations) {
-    const items = annotations.filter(a => a.previewDataUrl);
-    if (items.length === 0) return;
-    
-    els.cropPreview.classList.remove('hidden');
-    // 强制竖向排版：grid 默认是流式布局，只要容器宽度受限就会自动换行。
-    // 如果用户感觉到横向滑动，可能是容器没有 wrap 或者 overflow-x 设置问题。
-    // 我们确保容器是 flex-wrap 或者 grid
-    
-    const fragment = document.createDocumentFragment();
-    items.forEach((a, i) => {
-        const div = document.createElement('div');
-        div.className = 'border rounded overflow-hidden bg-white shadow-sm flex flex-col';
-        div.innerHTML = `
-            <img src="${a.previewDataUrl}" class="w-full h-32 object-contain bg-gray-50" />
-            <div class="p-2 text-xs text-gray-600 flex justify-between">
-                <span>${a.label}</span>
-                <span>box</span>
-            </div>
-        `;
-        fragment.appendChild(div);
-    });
-    els.cropGallery.appendChild(fragment);
+    window.ResultInspector?.schedule();
 }
 
 /**
@@ -1612,12 +1548,36 @@ function videoLoop() {
 
 // --- 基础工具函数 ---
 
+function waitForTaskDelay(milliseconds) {
+    if (window.TaskManager?.isStopped) return Promise.resolve();
+    return new Promise(resolve => {
+        let timer;
+        const finish = () => {
+            clearTimeout(timer);
+            window.removeEventListener('autotag-task-stop', finish);
+            resolve();
+        };
+        window.addEventListener('autotag-task-stop', finish, { once: true });
+        timer = setTimeout(finish, milliseconds);
+    });
+}
+
+function assertTaskNotStopped() {
+    if (!window.TaskManager?.isStopped) return;
+    const error = new Error('任务已手动结束，未发送后续识别请求');
+    error.taskStopped = true;
+    throw error;
+}
+
 async function enforceRateLimit() {
-    const rawVal = els.apiRpm && els.apiRpm.value ? els.apiRpm.value : '60';
+    if (window.TaskManager?.isStopped) return;
+    // Desktop requests are counted and scheduled once at the actual upstream boundary.
+    if (window.AppConfigManager?.schedulerEnabled) return;
+    const rawVal = els.apiRpm && els.apiRpm.value ? els.apiRpm.value : '0';
     const limit = parseInt(rawVal, 10);
 
     // -1 表示无限制
-    if (limit === -1) {
+    if (limit <= 0) {
         els.apiInfo.textContent = `API速率: 无限制`;
         return;
     }
@@ -1637,7 +1597,7 @@ async function enforceRateLimit() {
         const waitTime = oldest + windowMs - now + 100; // 多等100ms
         if (waitTime > 0) {
             els.apiInfo.textContent = `触发流控: 等待 ${(waitTime/1000).toFixed(1)}s`;
-            await new Promise(r => setTimeout(r, waitTime));
+            await waitForTaskDelay(waitTime);
             return enforceRateLimit(); // 重新检查
         }
     }
@@ -1647,17 +1607,25 @@ async function enforceRateLimit() {
 }
 
 async function fetchAPIWithRetry(config, messages, maxAttempts = 3) {
-    const retryableStatuses = new Set([408, 425, 429, 500, 502, 503, 504]);
+    const retryableStatuses = new Set([408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 529]);
     let lastError = null;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        assertTaskNotStopped();
+        if (config.requestBudget && config.requestBudget.remaining <= 0) throw lastError || new Error('已达到当前调用的请求上限');
+        await window.AppConfigManager?.waitForRecovery?.();
         await enforceRateLimit();
+        assertTaskNotStopped();
 
+        if (config.requestBudget) config.requestBudget.remaining--;
         let response;
         let rawText = '';
 
         try {
-            response = await fetch(config.url, {
+            const payload = { model: config.model, messages, stream: false };
+            const scheduled = window.AppConfigManager?.schedulerEnabled && config.taskId;
+            if (scheduled) { payload._autotag_task_id = config.taskId; payload._autotag_retry = attempt > 1 || config.jsonRetry === true; payload._autotag_context={file_name:config.fileName || '',phase:config.requestKind || ''}; }
+            response = scheduled ? await window.AppConfigManager.scheduledFetch(payload) : await fetch(config.url, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1665,11 +1633,14 @@ async function fetchAPIWithRetry(config, messages, maxAttempts = 3) {
                 },
                 // 部分视觉模型不支持 response_format，且原提示要求顶层数组；
                 // 依靠下面的容错解析兼容数组、objects、detections 和 boxes。
-                body: JSON.stringify({ model: config.model, messages, stream: false })
+                body: JSON.stringify(payload)
             });
             rawText = await response.text();
         } catch (error) {
+            if (error.fatal || error.taskStopped) throw error;
             lastError = new Error(`API 网络连接失败：${error?.message || error}`);
+            lastError.transportFailure = true;
+            lastError.recoverable = true;
         }
 
         if (response?.ok) {
@@ -1678,16 +1649,32 @@ async function fetchAPIWithRetry(config, messages, maxAttempts = 3) {
 
         if (response && !response.ok) {
             let detail = rawText;
+            let fatal = false;
+            let taskStopped = false;
+            let jsonRetryable = false;
+            let failedModel = '';
+            let upstreamRetryable = false;
             try {
                 const errorData = JSON.parse(rawText);
                 detail = errorData?.error?.message || errorData?.message || rawText;
+                fatal = errorData?.error?.fatal === true;
+                taskStopped = errorData?.error?.taskStopped === true;
+                jsonRetryable = errorData?.error?.retryable_json === true;
+                failedModel = errorData?.error?.model_used || '';
+                upstreamRetryable = errorData?.error?.origin === 'upstream' && errorData?.error?.retryable === true;
             } catch (_) {}
 
             lastError = new Error(
                 `API HTTP ${response.status}: ${String(detail).slice(0, 500)}`
             );
+            lastError.fatal = fatal;
+            lastError.taskStopped = taskStopped;
+            lastError.jsonRetryable = jsonRetryable;
+            lastError.transportFailure = true;
+            lastError.recoverable = !fatal && !taskStopped && (upstreamRetryable || retryableStatuses.has(response.status));
+            if (failedModel) lastError.modelsUsed = [failedModel];
 
-            if (!retryableStatuses.has(response.status)) {
+            if (fatal || taskStopped || !upstreamRetryable && !retryableStatuses.has(response.status)) {
                 throw lastError;
             }
         }
@@ -1709,7 +1696,7 @@ async function fetchAPIWithRetry(config, messages, maxAttempts = 3) {
                 `API 临时断线，${(waitMs / 1000).toFixed(1)} 秒后重试 ` +
                 `(${attempt + 1}/${maxAttempts})`;
         }
-        await new Promise(resolve => setTimeout(resolve, waitMs));
+        await waitForTaskDelay(waitMs);
     }
 
     throw lastError || new Error('API 请求失败');
@@ -1720,31 +1707,70 @@ function parseModelJsonContent(content, kind = 'any') {
 }
 
 async function callAPIJson(config, messages, kind = 'any') {
-    const rawText = await fetchAPIWithRetry(config, messages);
-
-    let data;
-    try {
-        data = JSON.parse(rawText);
-    } catch (_) {
-        throw new Error('API 返回了网页或非 JSON 内容，请检查完整的 /v1/chat/completions 地址');
+    const execute = async () => {
+    const retries = window.AppConfigManager?.publicConfig?.max_retries ?? 2;
+    const maxAttempts = Math.min(11, Math.max(1, Number(retries) + 1));
+    const budget = { remaining: maxAttempts };
+    let lastError;
+    let modelUsed;
+    for (let jsonAttempt = 0; jsonAttempt < maxAttempts; jsonAttempt++) {
+        assertTaskNotStopped();
+        const repair = jsonAttempt ? [...messages, { role: 'user', content:
+            `上一次返回未通过格式校验：${String(lastError?.message || 'JSON不完整').slice(0, 180)}。` +
+            '请重新检查原图并返回符合原任务结构的完整有效 JSON。只输出最终 JSON，不要解释、Markdown 或省略号；不要省略目标，不要将失败结果当作无目标。' }] : messages;
+        let data;
+        try {
+            const rawText = await fetchAPIWithRetry({ ...config, requestBudget: budget, jsonRetry: jsonAttempt > 0, requestKind:kind }, repair, maxAttempts);
+            try { data = JSON.parse(rawText); }
+            catch (_) { throw new Error('API 返回了非 JSON 内容'); }
+            modelUsed = data?._autotag?.model_used || config.model;
+            config.onModelUsed?.(modelUsed);
+            const provider = data?._autotag?.profile_id ? {profile_id:data._autotag.profile_id,profile_name:data._autotag.profile_name,protocol:data._autotag.protocol,model:modelUsed} : null;
+            if (provider) config.onProviderUsed?.(provider);
+            globalThis.AppConfigManager?.setActiveModel?.(modelUsed, data?._autotag?.auto_model);
+            const rawContent = data?.choices?.[0]?.message?.content;
+            const content = Array.isArray(rawContent) ? rawContent.map(p => p?.text || p?.content || '').join('\n') : rawContent;
+            if (data?.choices?.[0]?.finish_reason === 'content_filter') {
+                const error = new Error('模型响应被拦截，请人工检查'); error.noJsonRetry = true; throw error;
+            }
+            if (typeof content !== 'string' || !content.trim()) throw new Error('模型返回内容为空');
+            if (data?.choices?.[0]?.finish_reason === 'length') throw new Error('模型响应被截断，JSON 可能不完整');
+            const parsed = parseModelJsonContent(content, kind);
+            const labels = config.taskContext?.classNames || getRequestedClassNames();
+            if (['detections','polygons'].includes(kind)) AnnotationCore.normalizeObjects(parsed, labels, kind);
+            if (kind === 'review') AnnotationCore.normalizeObjects(parsed.missing_objects, labels);
+            Object.defineProperty(parsed, '__modelUsed', { value: modelUsed, enumerable: false });
+            Object.defineProperty(parsed, '__provider', { value: provider, enumerable: false });
+            return parsed;
+        } catch (error) {
+            if (error.taskStopped || error.fatal || error.noJsonRetry || error.transportFailure && !error.jsonRetryable) throw error;
+            if (error.modelsUsed?.length) { modelUsed = error.modelsUsed[0]; config.onModelUsed?.(modelUsed); }
+            lastError = error;
+            if (jsonAttempt >= maxAttempts - 1 || budget.remaining <= 0) break;
+            config.onJsonRetry?.();
+            if (els.apiInfo) els.apiInfo.textContent = `JSON 校验失败，正在重新请求 (${maxAttempts - budget.remaining + 1}/${maxAttempts})…`;
+            await waitForTaskDelay(Math.min(30000, 1000 * (2 ** jsonAttempt)));
+        }
     }
-
-    const rawContent = data?.choices?.[0]?.message?.content;
-    const content = Array.isArray(rawContent)
-        ? rawContent.map(part => part?.text || part?.content || '').join('\n')
-        : rawContent;
-    if (typeof content !== 'string' || !content.trim()) {
-        throw new Error('API 响应缺少 choices[0].message.content，请检查聊天接口与模型配置');
-    }
-    if (['length', 'content_filter'].includes(data?.choices?.[0]?.finish_reason)) {
-        throw new Error('模型响应被截断或拦截，结果已保留为异常，不能当作无目标');
-    }
-    return parseModelJsonContent(content, kind);
+    const error = new Error(`模型结果在最多 ${maxAttempts} 次请求后仍未通过 JSON 校验：${lastError?.message || '返回不完整'}，已保留图片等待复核`);
+    error.failureCode = lastError?.code || 'MODEL_VALIDATION_FAILED';
+    error.modelsUsed = modelUsed ? [modelUsed] : [];
+    throw error;
+    };
+    const manager = window.AppConfigManager;
+    return config.taskId && manager?.executeWithRecovery
+        ? manager.executeWithRecovery(execute) : execute();
 }
 
 async function callAPI(config, messages, kind = 'detections') {
     const parsed = await callAPIJson(config, messages, kind);
-    return AnnotationCore.normalizeObjects(parsed, getRequestedClassNames(), kind);
+    try {
+        return AnnotationCore.normalizeObjects(parsed, config.taskContext?.classNames || getRequestedClassNames(), kind)
+            .map(box => ({ ...box, model_used: parsed.__modelUsed, ...(parsed.__provider ? {provider_id:parsed.__provider.profile_id,provider_name:parsed.__provider.profile_name} : {}) }));
+    } catch (error) {
+        error.modelsUsed = parsed.__modelUsed ? [parsed.__modelUsed] : [];
+        throw error;
+    }
 }
 
 async function extractFrames(video, fps, onProgress) {
@@ -1779,42 +1805,21 @@ function updateProgress(pct, text) {
 
 function setLoading(isLoading) {
     state.isProcessing = isLoading;
+    window.ResultInspector?.schedule();
     els.startBtn.disabled = isLoading;
     els.loader.style.display = isLoading ? 'block' : 'none';
     els.btnText.innerText = isLoading ? 'AI正在计算...' : '开始分析';
 }
 
 function renderCropGallery() {
-    // 此函数现在仅用于单次刷新，如视频模式或非批处理模式
-    // 但我们的新逻辑是 append，所以如果是批处理，不应该调用这个
-    // 暂时保留，如果是非批处理单张分析，可能需要？
-    // 我们的 processImageTwoStage 已经改为 appendCropGallery 了
-    // 所以这个函数可能不再需要，或者只用于清空重绘？
-    // 实际上 renderCropGallery 是被 appendCropGallery 替代了大部分功能
-    // 为了兼容，如果其他地方调用了它：
-    const items = state.annotations.filter(a => a.previewDataUrl);
-    if (items.length === 0) {
-        els.cropPreview.classList.add('hidden');
-        els.cropGallery.innerHTML = '';
-        return;
-    }
-    els.cropPreview.classList.remove('hidden');
-    els.cropGallery.innerHTML = items.map((a, i) => `
-        <div class="border rounded overflow-hidden bg-white shadow-sm flex flex-col">
-            <img src="${a.previewDataUrl}" class="w-full h-32 object-contain bg-gray-50" />
-            <div class="p-2 text-xs text-gray-600 flex justify-between">
-                <span>${a.label}</span>
-                <span>box</span>
-            </div>
-        </div>
-    `).join('');
+    window.ResultInspector?.schedule();
 }
 
 async function verifyTargetPresence(config, base64, prompt, targetJsonLabel, teachingCount) {
     const teachingNote = teachingCount > 0
         ? `你已经看过 ${teachingCount} 张人工标注示例；以示例中的目标定义为准。`
         : '严格依据用户描述判断目标，不要把相似背景或干扰物当成目标。';
-    const messages = buildTeachingMessages([
+    const messages = buildTaskTeachingMessages(config, [
         {
             type: 'text',
             text:
@@ -1977,7 +1982,7 @@ async function detectTargetsInHighResolutionTiles(
         if (reportProgress) {
             els.statusMsg.textContent = `4K 分块复核：${index + 1}/${tiles.length}（${tile.name}）…`;
         }
-        const messages = buildTeachingMessages([
+        const messages = buildTaskTeachingMessages(config, [
             {
                 type: 'text',
                 text:
@@ -2010,17 +2015,29 @@ async function detectTargetsInHighResolutionTiles(
 
 async function reviewDetectionCompleteness(config, base64, prompt, classInstruction, boxes) {
     const existing = boxes.map(({ label, box_2d }) => ({ label, box_2d }));
-    const messages = buildTeachingMessages([
+    const messages = buildTaskTeachingMessages(config, [
         { type: 'text', text:
             `目标任务：${prompt}。${classInstruction}\n` +
             `已定位的目标：${JSON.stringify(existing)}。请独立逐类扫描整图，尤其检查小目标、遮挡、边缘和与背景相似的目标。` +
             '只补充尚未框出的独立目标，不重复已有框，不因某类缺失而虚构目标；地面图案、阴影和长条边框不能当作立体物体。' +
             '坐标为当前整图 0—1000 的 [ymin,xmin,ymax,xmax]。' +
             '只返回 JSON 对象：{"missing_objects":[{"label":"类别名","box_2d":[ymin,xmin,ymax,xmax]}],"complete":true或false,"reason":"简短依据"}。' +
-            '没有漏检时 missing_objects=[]；无法确认完整时 complete=false。不要输出解释过程或 Markdown。' },
+            'complete 表示把本次 missing_objects 全部合并后，结果是否完整，而不是原有框是否完整。' +
+            '若本次已补齐全部遗漏，complete=true；若仍有无法定位或无法确认的目标，complete=false，并说明尚未解决的事项。' +
+            '没有漏检时 missing_objects=[]。只补充框，不要在 reason 中声称已经纠正原有框；不要输出解释过程或 Markdown。' },
         { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64}` } }
     ]);
     return callAPIJson(config, messages, 'review');
+}
+
+async function recognizeImageNumbers(config, base64) {
+    const raw = await callAPIJson(config, [{ role: 'user', content: [
+        { type: 'text', text: '读取图片中实际可见的阿拉伯数字。不要从文件名或目标数量推测数字。只返回 JSON：' +
+            '{"status":"recognized或none或uncertain","numbers":["保留前导零的数字串"],"sequence":"用作该图片排序的序号或null","reason":"简短依据"}。' +
+            'numbers只含连续0-9数字串。看不清则uncertain；没有数字则none且numbers为空。只有明确的图片编号或唯一清晰数字才填写sequence；存在多个无法判定的数字时sequence为null。' },
+        { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64}` } }
+    ] }], 'numbers');
+    return { ...AnnotationCore.normalizeNumbers(raw), modelUsed: raw.__modelUsed };
 }
 
 async function processImageTwoStage(
@@ -2034,11 +2051,16 @@ async function processImageTwoStage(
         throw new Error('当前没有可分析的图片');
     }
 
+    const modelsUsed = new Set();
+    const providersUsed = new Map();
+    let jsonRetries = 0;
+    config = { ...config, onModelUsed: model => { if (model) modelsUsed.add(model); }, onProviderUsed: p => providersUsed.set(`${p.profile_id}:${p.model}`,p), onJsonRetry: () => jsonRetries++ };
+
     const t0 = performance.now();
     const analysisCanvas = createAnalysisCanvas(sourceImage);
     const base64 = analysisCanvas.toDataURL('image/jpeg', 0.92).split(',')[1];
-    const prompt = els.promptInput.value.trim() || '目标';
-    const classLabelInputVal = els.classLabelInput.value.trim();
+    const prompt = config.taskContext?.prompt ?? (els.promptInput.value.trim() || '目标');
+    const classLabelInputVal = config.taskContext?.classLabel ?? els.classLabelInput.value.trim();
     // 支持空格分割多标签
     const manualLabels = classLabelInputVal ? classLabelInputVal.split(/\s+/) : [];
     
@@ -2046,9 +2068,9 @@ async function processImageTwoStage(
     const targetJsonLabel = (manualLabels.length > 0) ? manualLabels[0] : (classLabelInputVal || prompt);
 
     // ... (构造 msg1, 调用 callAPI API检测 Box) ...
-    const classInstruction = buildTaskClassInstruction(targetJsonLabel);
+    const classInstruction = buildTaskClassInstruction(targetJsonLabel, config.taskContext?.classNames);
 
-    const teachingCount = Math.min(3, state.teachingExamples?.length || 0);
+    const teachingCount = Math.min(3, (config.taskContext?.teachingExamples || state.teachingExamples)?.length || 0);
     const teachingInstruction = teachingCount > 0
         ? `\n你已经看到 ${teachingCount} 张人工标注示例。请严格模仿示例中的目标定义和贴边框选方式；` +
           '不要把背景、阴影或相邻目标包含进框内。'
@@ -2060,7 +2082,7 @@ async function processImageTwoStage(
         '每个独立目标必须分别返回一个紧贴外轮廓的框，不得把多个相邻目标合并成一个框。' +
         '只有仔细检查完整张图片并确信一个目标都没有时，才返回空数组 []。' +
         '只输出 JSON 数组，不要输出 Markdown、计数说明或其他文字。';
-    const msg1 = buildTeachingMessages([
+    const msg1 = buildTaskTeachingMessages(config, [
         {
             type: "text",
             text:
@@ -2081,7 +2103,7 @@ async function processImageTwoStage(
         reason: boxes.length > 0 ? '初次检测已定位到目标' : '初次检测返回空数组'
     };
 
-    if (boxes.length === 0) {
+    if (boxes.length === 0 && !window.TaskManager?.isStopped) {
         if (reportProgress) {
             els.statusMsg.textContent = '初次检测为 0，正在进行独立空结果复核…';
         }
@@ -2096,6 +2118,7 @@ async function processImageTwoStage(
                 teachingCount
             );
         } catch (error) {
+            if (error.fatal || error.taskStopped) throw error;
             presence = {
                 hasTarget: true,
                 estimatedCount: 0,
@@ -2196,7 +2219,7 @@ async function processImageTwoStage(
                 els.statusMsg.textContent =
                     `空结果未获确认，正在高召回重检${presence.estimatedCount > 0 ? `（复核估计 ${presence.estimatedCount} 个）` : ''}…`;
             }
-            const retryMessages = buildTeachingMessages([
+            const retryMessages = buildTaskTeachingMessages(config, [
                 {
                     type: 'text',
                     text:
@@ -2230,10 +2253,10 @@ async function processImageTwoStage(
     }
 
 
-    if (boxes.length > 0 && els.verifyDetections?.checked !== false) {
+    if (boxes.length > 0 && (config.taskContext?.verifyDetections ?? (els.verifyDetections?.checked !== false)) && !window.TaskManager?.isStopped) {
         try {
             const review = await reviewDetectionCompleteness(config, base64, prompt, classInstruction, boxes);
-            const missing = AnnotationCore.normalizeObjects(review.missing_objects, getRequestedClassNames());
+            const missing = AnnotationCore.normalizeObjects(review.missing_objects, config.taskContext?.classNames || getRequestedClassNames()).map(box => ({ ...box, model_used: review.__modelUsed }));
             const merged = AnnotationCore.mergeMissing(boxes, missing);
             boxes = merged.boxes;
             validation = {
@@ -2241,13 +2264,16 @@ async function processImageTwoStage(
                 status: merged.added ? 'recovered_missing' : 'reviewed_detected',
                 needsReview: validation.needsReview || !review.complete || merged.conflict,
                 completenessChecked: true,
+                completenessReview: { status: merged.conflict ? 'conflict' : review.complete ? 'complete' : 'uncertain', declaredComplete: review.complete, added: merged.added, reason: review.reason || '' },
                 recoveredCount: merged.added,
                 confidence: null,
                 estimatedCount: boxes.length,
                 reason: merged.conflict ? '复核结果存在类别冲突，请人工检查' : (review.reason || '已逐类复核目标完整性')
             };
         } catch (error) {
+            if (error.fatal || error.taskStopped) { error.partialBoxes = boxes; throw error; }
             validation = { ...validation, status: 'needs_review', needsReview: true, confidence: null,
+                completenessReview: { status:'failed', failureCode:error.failureCode || error.code || 'REVIEW_REQUEST_FAILED', reason:String(error.message || error) },
                 reason: `已保留初次框，但漏检复核失败：${error?.message || error}` };
         }
     }
@@ -2279,22 +2305,23 @@ async function processImageTwoStage(
     let apiTime = 0, cropTime = 0;
 
     // 【优化点】：检查是否勾选了透明图（这决定了是否需要第二阶段的API调用）
-    const needTransparent = els.extractTransparent && els.extractTransparent.checked;
+    const needTransparent = config.taskContext?.extractTransparent ?? (els.extractTransparent && els.extractTransparent.checked);
 
     for (let i = 0; i < boxes.length; i++) {
+        if (window.TaskManager?.isStopped) break;
         const b = boxes[i];
         const [ymin, xmin, ymax, xmax] = b.box_2d;
         const rx = (xmin/1000)*sw, ry = (ymin/1000)*sh, rw = ((xmax-xmin)/1000)*sw, rh = ((ymax-ymin)/1000)*sh;
         
         const c0 = performance.now();
-        const c = els.exportCanvas;
+        const c = document.createElement('canvas');
         c.width = rw; c.height = rh;
         const cctx = c.getContext('2d');
         cctx.drawImage(sourceImage, rx, ry, rw, rh, 0, 0, rw, rh);
         let upCanvas = c;
         
         // 如果不需要透明图，不需要进行高质量缩放，scale 1 即可
-        const scale = parseFloat(els.scaleFactor && els.scaleFactor.value ? els.scaleFactor.value : '4') || 4;
+        const scale = config.taskContext?.scale ?? (parseFloat(els.scaleFactor?.value || '4') || 4);
         const effectiveScale = needTransparent ? scale : 1; 
 
         if (effectiveScale !== 1) {
@@ -2332,10 +2359,12 @@ async function processImageTwoStage(
             const up64 = previewUrl.split(',')[1];
             const a0 = performance.now();
             const msg2 = [{ role: "user", content: [
-                { type: "text", text: `返回精确多边形 [{"label":"${b.label}","polygon":[[y,x],...]]}]，坐标归一化到0-1000。尤其要包含向外突出或向内凹的尖角和转折处` },
+                { type: "text", text: `返回精确多边形 [{"label":"${b.label}","polygon":[[y,x],[y,x],[y,x]]}]，每个多边形至少3个点，坐标归一化到0-1000。尤其要包含向外突出或向内凹的尖角和转折处` },
                 { type: "image_url", image_url: { url: `data:image/jpeg;base64,${up64}` } }
             ]}];
-            const polys = await callAPI(config, msg2, 'polygons');
+            let polys;
+            try { polys = await callAPI(config, msg2, 'polygons'); }
+            catch (error) { error.partialBoxes = boxes; throw error; }
             const a1 = performance.now();
             apiTime += (a1 - a0);
             
@@ -2386,13 +2415,38 @@ async function processImageTwoStage(
     if (reportProgress) {
         els.statusMsg.textContent = `阶段1：${stage1Time}ms，裁剪：${Math.round(cropTime)}ms，API：${Math.round(apiTime)}ms，总计：${Math.round(t2 - t0)}ms`;
     }
-    return { boxes, validation };
+    let numberRecognition = { status: 'disabled', numbers: [], sequence: null };
+    if (config.taskContext?.readImageNumbers && !window.TaskManager?.isStopped) {
+        try {
+            numberRecognition = await recognizeImageNumbers(config, base64);
+        } catch (error) {
+            if (error.fatal || error.taskStopped) { error.partialBoxes = boxes; throw error; }
+            numberRecognition = { status: 'failed', numbers: [], sequence: null, reason: String(error.message || error) };
+        }
+    }
+    validation.modelsUsed = [...modelsUsed];
+    validation.providersUsed = [...providersUsed.values()];
+    validation.jsonRetries = jsonRetries;
+    if (window.TaskManager?.isStopped) {
+        validation = { ...validation, status: 'stopped_pending_review', verifiedEmpty: false,
+            needsReview: true, reason: '任务已手动结束，当前返回结果已保留，请人工复核' };
+    }
+    return { boxes, validation, numberRecognition };
 }
 
 async function processImagesBatch(config) {
     const files = state.files && state.files.length ? state.files : (state.file ? [state.file] : []);
     if (files.length === 0) return;
-    const concurrency = 1;
+    const concurrency = () => Math.min(60, Math.max(1, window.AppConfigManager?.publicConfig?.max_concurrency || 10));
+    config = { ...config, taskContext: {
+        prompt: els.promptInput.value.trim() || '目标', classLabel: els.classLabelInput.value.trim(),
+        classNames: getRequestedClassNames(), teachingExamples: JSON.parse(JSON.stringify(state.teachingExamples || [])),
+        verifyDetections: els.verifyDetections?.checked !== false,
+        extractTransparent: els.extractTransparent?.checked === true,
+        readImageNumbers: els.readImageNumbers?.checked === true,
+        scale: parseFloat(els.scaleFactor?.value || '4') || 4
+    } };
+    config.taskContext.classNames.forEach(label => getClassId(label));
     // state.imageResults = []; // Modified for resume support
     if (!state.imageResults) state.imageResults = [];
     
@@ -2411,21 +2465,34 @@ async function processImagesBatch(config) {
 
     const worker = async (file) => {
         try {
+            const imageConfig={...config,fileName:file.name};
             const { img, dataUrl } = await readImageFile(file);
-            const detection = await processImageTwoStage(
-                config,
-                isSingleFile,
-                img,
-                false,
-                boxes => showAnnotationsForFile(file, boxes)
-            );
+            const previous = state.imageResults.find(r => r.file === file || r.fileName === file.name);
+            const numberOnly = config.taskContext.readImageNumbers && previous && !previous.needsReview &&
+                (previous.annotations?.length || previous.verifiedEmpty) &&
+                (!previous.numberRecognition || ['disabled','failed'].includes(previous.numberRecognition.status));
+            let detection;
+            if (numberOnly) {
+                const boxes = JSON.parse(JSON.stringify(previous.annotations || []));
+                let numberRecognition;
+                try { numberRecognition = await recognizeImageNumbers(imageConfig, createAnalysisCanvas(img).toDataURL('image/jpeg',.92).split(',')[1]); }
+                catch (error) {
+                    if (error.fatal || error.taskStopped) { error.partialBoxes=boxes;throw error; }
+                    numberRecognition={status:'failed',numbers:[],sequence:null,reason:String(error.message || error)};
+                }
+                detection={boxes,validation:{...previous.validation,modelsUsed:[...new Set([...(previous.validation?.modelsUsed || []),numberRecognition.modelUsed].filter(Boolean))]},numberRecognition};
+            } else {
+                detection = await processImageTwoStage(imageConfig,isSingleFile,img,false,boxes=>showAnnotationsForFile(file,boxes));
+            }
             const anns = detection.boxes;
             const result = {
+                ...(numberOnly ? previous : {}),
                 fileName: file.name,
                 file,
                 annotations: JSON.parse(JSON.stringify(anns)),
                 dataUrl,
                 validation: detection.validation,
+                numberRecognition: detection.numberRecognition,
                 verifiedEmpty: detection.validation?.verifiedEmpty === true,
                 needsReview: detection.validation?.needsReview === true
             };
@@ -2446,8 +2513,10 @@ async function processImagesBatch(config) {
             appendTimelineItem(file, anns, resultIndex, result);
             appendCropGallery(anns);
             showAnnotationsForFile(file, anns);
+            window.AppConfigManager?.recordImageCompletion?.(!result.needsReview);
         } catch (error) {
-            recordImageProcessingError(file, String(error?.message || error || '未知错误'));
+            recordImageProcessingError(file, String(error?.message || error || '未知错误'), error.modelsUsed, error.partialBoxes);
+            window.AppConfigManager?.recordImageCompletion?.(false, error.taskStopped);
             throw error;
         } finally {
             if (!isSingleFile) {
@@ -2459,24 +2528,8 @@ async function processImagesBatch(config) {
     
     if (!isSingleFile) updateProgress(0, `准备处理 ${total} 张图片...`);
     
-    // 如果只有一张图，不需要 concurrency 逻辑，直接跑
-    let batchSummary;
-    if (isSingleFile) {
-        try {
-            await worker(files[0]);
-            batchSummary = { attempted: 1, succeeded: 1, failed: 0, skipped: 0, errors: [] };
-        } catch (error) {
-            batchSummary = {
-                attempted: 1,
-                succeeded: 0,
-                failed: 1,
-                skipped: 0,
-                errors: [{ fileName: files[0]?.name || '当前图片', message: String(error?.message || error) }]
-            };
-        }
-    } else {
-        batchSummary = await runWithConcurrency(files, worker, concurrency);
-    }
+    // 单图和批次共用生命周期，结束按钮和人工复核行为保持一致。
+    let batchSummary = await runWithConcurrency(files, worker, concurrency);
 
     // 兼容未加载 task_manager.js 的普通网页运行路径。
     batchSummary = batchSummary || {
@@ -2496,7 +2549,9 @@ async function processImagesBatch(config) {
     const availableResults = state.imageResults.filter(item => selectedNames.has(item.fileName)).length;
     batchSummary.availableResults = availableResults;
 
-    if (batchSummary.failed > 0) {
+    if (batchSummary.stopped) {
+        els.statusMsg.textContent = `任务已手动结束：已处理 ${batchSummary.succeeded} 张 · 未处理 ${batchSummary.unprocessed || 0} 张，进入人工复核`;
+    } else if (batchSummary.failed > 0) {
         const firstError = batchSummary.errors?.[0]?.message || '未知错误';
         els.statusMsg.textContent =
             `图片处理未完成：成功 ${batchSummary.succeeded} 张 · 失败 ${batchSummary.failed} 张 · ` +
@@ -2510,7 +2565,7 @@ async function processImagesBatch(config) {
     return batchSummary;
 }
 
-function recordImageProcessingError(file, message) {
+function recordImageProcessingError(file, message, modelsUsed = [], partialBoxes = null) {
     if (!file) return null;
     if (!Array.isArray(state.imageResults)) state.imageResults = [];
     const normalizedMessage = String(message || '未知错误');
@@ -2518,7 +2573,7 @@ function recordImageProcessingError(file, message) {
         item.file === file || item.fileName === file.name
     );
     const existing = existingIndex >= 0 ? state.imageResults[existingIndex] : null;
-    const annotations = Array.isArray(existing?.annotations)
+    const annotations = Array.isArray(partialBoxes) ? JSON.parse(JSON.stringify(partialBoxes)) : Array.isArray(existing?.annotations)
         ? JSON.parse(JSON.stringify(existing.annotations))
         : [];
     const result = {
@@ -2536,11 +2591,13 @@ function recordImageProcessingError(file, message) {
             verifiedEmpty: false,
             needsReview: true,
             estimatedCount: annotations.length,
+            modelsUsed: [...new Set([...(existing?.validation?.modelsUsed || []), ...modelsUsed, ...annotations.map(a => a.model_used).filter(Boolean)])],
             reason: normalizedMessage
         }
     };
     if (existingIndex >= 0) state.imageResults[existingIndex] = result;
     else state.imageResults.push(result);
+    window.ResultInspector?.schedule();
     return result;
 }
 
@@ -2730,7 +2787,8 @@ async function analyzeVideoFile(file, config, onProgress) {
 
 async function runWithConcurrency(items, worker, concurrency) {
     let index = 0;
-    const runners = new Array(Math.min(concurrency, items.length)).fill(0).map(async () => {
+    const limit = typeof concurrency === 'function' ? concurrency() : concurrency;
+    const runners = new Array(Math.min(limit, items.length)).fill(0).map(async () => {
         while (index < items.length) {
             const current = index++;
             await worker(items[current]);
@@ -2842,7 +2900,7 @@ async function exportBatchVideoFrames() {
                 imgFolder.file(`${frameName}.jpg`, frame.base64, { base64: true });
 
                 const frameAnns = (item.annotations || []).filter(ann =>
-                    Array.isArray(ann.box_2d) && Math.abs(Number(ann.time) - frame.time) < (0.5 / fps)
+                    ReviewState.validBox(ann) && Array.isArray(ann.box_2d) && Math.abs(Number(ann.time) - frame.time) < (0.5 / fps)
                 );
                 if (frameAnns.length > 0) labeledFrames += 1;
                 const lines = frameAnns.map(ann => {

@@ -4,6 +4,7 @@
     else root.AnnotationCore = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
     'use strict';
+    function modelError(code, message) { const error = new Error(message); error.code = code; return error; }
     function objectList(value) {
         if (Array.isArray(value)) return value;
         if (!value || typeof value !== 'object') return null;
@@ -13,6 +14,9 @@
         return null;
     }
     function matchesSchema(value, kind) {
+        if (kind === 'numbers') {
+            try { normalizeNumbers(value); return true; } catch (_) { return false; }
+        }
         if (kind === 'presence') return value && !Array.isArray(value) && typeof value === 'object' && ['has_target', 'hasTarget', 'present'].some(key => key in value);
         if (kind === 'review') return value && !Array.isArray(value) && typeof value.complete === 'boolean' && Array.isArray(value.missing_objects);
         const objects = objectList(value);
@@ -47,7 +51,7 @@
         return found;
     }
     function parseModelJson(content, kind = 'any') {
-        if (typeof content !== 'string' || !content.trim()) throw new Error('模型响应内容为空');
+        if (typeof content !== 'string' || !content.trim()) throw modelError('MODEL_EMPTY', '模型响应内容为空');
         if (content.length > 2 * 1024 * 1024) throw new Error('模型响应过长，请缩小任务范围');
         const candidates = [content.trim()];
         const fences = [...content.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)];
@@ -56,17 +60,21 @@
             try {
                 const parsed = JSON.parse(finalFence);
                 if (matchesSchema(parsed, kind)) return parsed;
-            } catch (_) { /* An invalid final block must not fall back to an earlier empty example. */ }
-            throw new Error('模型最终 JSON 代码块无效，已保留图片等待复核');
+                throw modelError('MODEL_SCHEMA_INVALID', 'JSON 已解析，但字段或任务结构不符合要求');
+            } catch (error) { if (error.code) throw error; /* Never fall back to an earlier empty example. */ }
+            throw modelError('MODEL_JSON_INVALID', '模型最终 JSON 代码块无效，已保留图片等待复核');
         }
         const containers = jsonContainers(content);
-        if (containers.unfinished) throw new Error('模型最终 JSON 不完整，已保留图片等待复核');
-        candidates.push(...containers.reverse());
+        if (containers.unfinished) throw modelError('MODEL_JSON_INCOMPLETE', '模型最终 JSON 不完整，已保留图片等待复核');
+        // Only the final container is an answer candidate. A balanced but
+        // invalid final answer must never fall back to an earlier example [].
+        if (containers.length) candidates.push(containers[containers.length - 1]);
+        let parsedContainer = false;
         for (const candidate of candidates) {
-            try { const parsed = JSON.parse(candidate); if (matchesSchema(parsed, kind)) return parsed; }
+            try { const parsed = JSON.parse(candidate); parsedContainer = true; if (matchesSchema(parsed, kind)) return parsed; }
             catch (_) { /* Never invent missing brackets or repair truncated annotations. */ }
         }
-        throw new Error('模型未返回符合任务格式的完整 JSON，已保留图片等待复核');
+        throw modelError(parsedContainer ? 'MODEL_SCHEMA_INVALID' : 'MODEL_JSON_INVALID', parsedContainer ? 'JSON 已解析，但字段或任务结构不符合要求' : '模型未返回有效 JSON，已保留图片等待复核');
     }
     function normalizeObjects(value, labels = [], kind = 'detections') {
         const objects = objectList(value);
@@ -107,5 +115,15 @@
         }
         return { boxes, added: boxes.length - original.length, conflict };
     }
-    return { parseModelJson, normalizeObjects, objectList, mergeMissing };
+    function normalizeNumbers(value) {
+        if (!value || Array.isArray(value) || !['recognized','none','uncertain'].includes(value.status) || !Array.isArray(value.numbers) || value.numbers.length > 32)
+            throw new Error('图片数字格式无效');
+        if (!value.numbers.every(n => typeof n === 'string' && /^\d{1,32}$/.test(n))) throw new Error('图片数字必须是保留前导零的数字串');
+        const numbers = [...new Set(value.numbers)];
+        const sequence = value.sequence == null ? null : value.sequence;
+        if (sequence !== null && (typeof sequence !== 'string' || !numbers.includes(sequence))) throw new Error('图片序号与识别数字不一致');
+        if (value.status === 'none' && numbers.length || value.status === 'recognized' && !numbers.length) throw new Error('图片数字状态矛盾');
+        return { status: value.status, numbers, sequence: value.status === 'recognized' ? sequence : null, reason: String(value.reason || '').slice(0,300) };
+    }
+    return { parseModelJson, normalizeObjects, objectList, mergeMissing, normalizeNumbers };
 });

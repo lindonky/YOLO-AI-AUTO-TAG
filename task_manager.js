@@ -100,12 +100,14 @@ const TaskManager = {
         els.statusMsg.textContent = '任务继续执行...';
     },
 
-    stop() {
-        if (confirm('确定要结束当前任务吗？结束后的数据可以正常导出。')) {
+    stop(confirmed = false) {
+        if (confirmed || confirm('确定要结束识别并进入人工复核吗？已完成结果会保留，当前已发出的请求结束后不再继续识别。')) {
             this.isStopped = true;
             this.isPaused = false;
             this.updateUIState('running');
-            els.statusMsg.textContent = '正在安全结束任务，已完成的数据会保留...';
+            els.statusMsg.textContent = '正在结束任务，等待当前请求完成后进入人工复核…';
+            window.dispatchEvent?.(new Event('autotag-task-stop'));
+            window.AppConfigManager?.stopTask?.().catch(error => console.warn('Stop notification:', error.message));
         }
     },
 
@@ -231,15 +233,18 @@ const TaskManager = {
             failed: 0,
             skipped: 0,
             errors: [],
-            stopped: false
+            stopped: false,
+            cancelled: 0,
+            unprocessed: 0
         };
         
         // 只有非视频模式才跳过已处理的；视频模式可能需要继续
-        if (!state.isVideoMode) {
+        if (!state.isVideoMode && items.length > 1) {
             state.imageResults.forEach(r => {
                 const hasAnnotations = Array.isArray(r.annotations) && r.annotations.length > 0;
                 // 待复核结果和旧版本产生的未验证空结果必须允许重新处理。
-                if (!r.needsReview && (hasAnnotations || r.verifiedEmpty === true)) {
+                const needsNumbers = els.readImageNumbers?.checked === true && (!r.numberRecognition || ['disabled','failed'].includes(r.numberRecognition.status));
+                if (!needsNumbers && !r.needsReview && (hasAnnotations || r.verifiedEmpty === true)) {
                     processedNames.add(r.fileName);
                 }
             });
@@ -248,48 +253,65 @@ const TaskManager = {
         }
 
         let index = 0;
+        let fatalError = null;
         const total = items.length;
         
-        // 并发 Promise 池
-        const runners = new Array(Math.min(concurrency, items.length)).fill(0).map(async () => {
-            while (index < items.length) {
-                if (this.isStopped) break;
-                
-                // 暂停检查
-                while (this.isPaused) {
-                    if (this.isStopped) break;
-                    await new Promise(r => setTimeout(r, 500));
-                }
-                if (this.isStopped) break;
-
-                // 取任务
-                const currentIndex = index++; 
-                if (currentIndex >= items.length) break;
-                
-                const item = items[currentIndex];
-
-                // 图片模式跳过逻辑
-                if (!state.isVideoMode && processedNames.has(item.name)) {
-                    summary.skipped++;
-                    continue;
-                }
-                
-                summary.attempted++;
+        // Refill immediately after any item finishes; each image owns its context.
+        const running = new Set();
+        const limit = () => Math.min(60, Math.max(1, Number(typeof concurrency === 'function' ? concurrency() : concurrency) || 1));
+        const launch = (item, currentIndex) => {
+            summary.attempted++;
+            const pending = Promise.resolve().then(async () => {
                 try {
                     await worker(item);
                     summary.succeeded++;
                 } catch (err) {
-                    console.error("Worker error:", err);
+                    if (err?.taskStopped) { summary.cancelled++; return; }
+                    console.error('Worker error:', err);
                     summary.failed++;
-                    summary.errors.push({
-                        fileName: item?.name || `第 ${currentIndex + 1} 项`,
-                        message: String(err?.message || err || '未知错误')
-                    });
+                    if (err?.fatal && !fatalError) {
+                        fatalError = err;
+                        window.AppConfigManager?.stopTask?.('fatal_error').catch(() => {});
+                    }
+                    summary.errors.push({ fileName: item?.name || `第 ${currentIndex + 1} 项`, message: String(err?.message || err || '未知错误') });
                 }
+            }).finally(() => running.delete(pending));
+            running.add(pending);
+        };
+        while (index < items.length || running.size) {
+            while (!this.isStopped && !fatalError && !this.isPaused && !window.AppConfigManager?.isRecovering && index < items.length && running.size < limit()) {
+                const currentIndex = index++;
+                const item = items[currentIndex];
+                if (!state.isVideoMode && processedNames.has(item.name)) { summary.skipped++; continue; }
+                launch(item, currentIndex);
             }
-        });
+            if (!running.size && (this.isStopped || fatalError || index >= items.length)) break;
+            if (this.isStopped || fatalError) await Promise.all(running);
+            else if (typeof concurrency === 'function' || this.isPaused || window.AppConfigManager?.isRecovering) {
+                // Only poll for control changes while capacity is occupied/paused;
+                // settled work still wakes this race immediately.
+                let timer;
+                await Promise.race([...running, new Promise(resolve => { timer = setTimeout(resolve, 200); })]);
+                clearTimeout(timer);
+            } else await Promise.race(running);
+        }
 
-        await Promise.all(runners);
+        if (this.isStopped && !state.isVideoMode) {
+            summary.unprocessed = summary.cancelled;
+            for (const item of items.slice(index)) {
+                if (processedNames.has(item.name)) { summary.skipped++; continue; }
+                recordImageProcessingError(item, '任务已手动结束，该图片尚未识别，请在人工复核中处理或恢复任务后继续');
+                summary.unprocessed++;
+            }
+        }
+        if (fatalError && !state.isVideoMode) {
+            for (const item of items.slice(index)) {
+                if (processedNames.has(item.name)) { summary.skipped++; continue; }
+                recordImageProcessingError(item, `模型自动选择已停止：${fatalError.message}`);
+                summary.failed++;
+                summary.errors.push({ fileName: item.name, message: fatalError.message });
+            }
+        }
         summary.stopped = this.isStopped;
         this.endTaskLifecycle();
         if (summary.stopped) {
@@ -336,13 +358,18 @@ const TaskManager = {
             const manualFrameInput = document.getElementById('manualFrame');
 
             // 保存元数据
+            window.TaskClasses?.ensure();
             const taskConfig = {
+                formatVersion: 2,
+                applicationVersion: '1.2.7',
+                classes: getAllClasses(),
                 timestamp: Date.now(),
                 mode: isVideo ? 'video' : 'image',
                 model: els.modelSelect.value,
                 prompt: els.promptInput.value,
                 classLabel: els.classLabelInput.value, // 保存类别名
                 verifyDetections: els.verifyDetections?.checked !== false,
+                readImageNumbers: els.readImageNumbers?.checked === true,
                 scaleFactor: els.scaleFactor.value,
                 apiRpm: els.apiRpm.value,
                 parallelCount: els.parallelCountGlobal.value,
@@ -442,6 +469,7 @@ const TaskManager = {
             els.promptInput.value = taskConfig.prompt || '';
             if (els.classLabelInput) els.classLabelInput.value = taskConfig.classLabel || ''; // 恢复类别名
             if (els.verifyDetections) els.verifyDetections.checked = taskConfig.verifyDetections !== false;
+            if (els.readImageNumbers) els.readImageNumbers.checked = taskConfig.readImageNumbers === true;
             if (taskConfig.scaleFactor) els.scaleFactor.value = taskConfig.scaleFactor;
             if (taskConfig.parallelCount) els.parallelCountGlobal.value = taskConfig.parallelCount;
             state.teachingExamples = Array.isArray(taskConfig.teachingExamples)
@@ -503,11 +531,13 @@ const TaskManager = {
             renderFileList();
 
             // 6. 恢复分析结果
-            const restoredResults = taskConfig.results.map(r => {
+            const restoredResults = (taskConfig.results || []).map(r => {
                 const matchingFile = restoredFiles.find(f => f.name === r.fileName);
                 return { ...r, file: matchingFile, fps: r.fps || parseFloat(taskConfig.frameRate || 1) };
             });
 
+            window.TaskClasses?.restore(taskConfig, restoredResults);
+            document.dispatchEvent(new CustomEvent('annotation-task-restored'));
             if (taskConfig.mode === 'video') {
                 state.videoResults = restoredResults;
                 els.statusMsg.textContent = `已恢复 ${restoredResults.length} 个视频的处理记录`;
@@ -545,6 +575,9 @@ const TaskManager = {
         }
     }
 };
+
+// The analysis pipeline reads pause/stop state through window.TaskManager.
+window.TaskManager = TaskManager;
 
 if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => TaskManager.init());

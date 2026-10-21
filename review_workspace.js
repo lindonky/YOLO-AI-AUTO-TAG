@@ -11,8 +11,8 @@
             description: '确认整张图片没有目标', rule: 'TXT 保留为空文件（0 KB）'
         },
         error: {
-            label: '异常图', folder: 'error', symbol: '!',
-            description: '识别失败、结果缺失或仍需人工处理', rule: '始终允许随任务包导出，不丢弃原图'
+            label: '待处理', folder: 'error', symbol: '!',
+            description: '识别失败或已有框待复核', rule: '原图和已有框均保留；查看卡片原因后确认'
         }
     };
     const CATEGORY_KEYS = Object.keys(CATEGORY_META);
@@ -36,11 +36,15 @@
     const objectUrls = new WeakMap();
     const deckIndices = { normal: 0, background: 0, error: 0 };
     const folderScrollTops = { normal: 0, background: 0, error: 0 };
-    const wheelStates = {
-        normal: { armed: true, timer: null },
-        background: { armed: true, timer: null },
-        error: { armed: true, timer: null }
-    };
+    let viewMode = 'overview';
+    try { if (localStorage.getItem('review-view') === 'single') viewMode = 'single'; } catch (_) {}
+    const overlayRecords = new WeakMap();
+    const overlayObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(entries => {
+        for (const entry of entries) {
+            const record = overlayRecords.get(entry.target);
+            if (record) fitOverlayToContainedImage(record.image, record.overlay, entry.target);
+        }
+    }) : null;
     const animatingDecks = new Set();
 
     let root = null;
@@ -49,8 +53,7 @@
     let editorImage = null;
     let activeFilter = 'all';
     let searchTerm = '';
-    let editingResult = null;
-    let selectedBoxIndex = 0;
+    let editor = null;
     let draggedReviewId = '';
     let toastTimer = null;
     let reviewIdCounter = 0;
@@ -86,16 +89,7 @@
     }
 
     function defaultCategory(result) {
-        if (result?.reviewCategory === 'review') return 'error';
-        const boxes = Array.isArray(result?.annotations) ? result.annotations : [];
-        const validationStatus = String(result?.validation?.status || '');
-        if (result?.processingError || validationStatus === 'processing_error') return 'error';
-        if (result?.needsReview && !result?.manualReviewed) return 'error';
-        if (result?.reviewCategory && CATEGORY_META[result.reviewCategory]) return result.reviewCategory;
-        if (result?.needsReview) return 'error';
-        if (boxes.length > 0) return 'normal';
-        if (result?.verifiedEmpty === true) return 'background';
-        return 'error';
+        return ReviewState.categoryFor(result);
     }
 
     function prepareResults() {
@@ -139,6 +133,9 @@
         results.forEach(result => {
             getResultId(result);
             result.annotations = Array.isArray(result.annotations) ? result.annotations : [];
+            if ((result.processingError || result.needsReview) && result.manualReviewed && /^manual_(normal|background)$/.test(result.validation?.status || '') && ReviewState.categoryFor(result) !== 'error') {
+                ReviewState.applyManualDecision(result, result.validation.reason || '已导入的人工确认', result.manualReviewedAt || Date.now());
+            }
             result.reviewCategory = defaultCategory(result);
             const issue = issueFor(result);
             if (issue && result.reviewCategory !== 'error') {
@@ -157,19 +154,12 @@
     }
 
     function isValidBox(annotation) {
-        if (!annotation || typeof annotation.label !== 'string' || !annotation.label.trim()) return false;
-        if (!Array.isArray(annotation.box_2d) || annotation.box_2d.length !== 4) return false;
-        const [rawY1, rawX1, rawY2, rawX2] = annotation.box_2d.map(Number);
-        if (![rawY1, rawX1, rawY2, rawX2].every(Number.isFinite)) return false;
-        const y1 = clamp(rawY1, 0, 1000);
-        const x1 = clamp(rawX1, 0, 1000);
-        const y2 = clamp(rawY2, 0, 1000);
-        const x2 = clamp(rawX2, 0, 1000);
-        return y2 - y1 >= 2 && x2 - x1 >= 2;
+        return ReviewState.validBox(annotation);
     }
 
     function issueFor(result) {
         const boxes = Array.isArray(result.annotations) ? result.annotations : [];
+        if (boxes.some(annotation => annotation.unclassified || !annotation.label)) return '存在未分类框，请先选择类别；原框会保留到待处理';
         if (boxes.some(annotation => !isValidBox(annotation))) return '存在无效标注框，请修改或删除';
         if (result.reviewCategory === 'normal' && boxes.length === 0) return '正常图至少需要 1 个标注框';
         if (result.reviewCategory === 'background' && boxes.length > 0) return '背景图必须删除全部标注框';
@@ -177,28 +167,8 @@
     }
 
     function syncResultFlags(result, reason = 'manual-review') {
-        const boxes = Array.isArray(result.annotations) ? result.annotations : [];
         const issue = issueFor(result);
-        result.manualReviewed = true;
-        result.manualReviewedAt = Date.now();
-        if (result.reviewCategory === 'background' && !issue) {
-            result.verifiedEmpty = true;
-            result.needsReview = false;
-        } else if (result.reviewCategory === 'normal' && !issue) {
-            result.verifiedEmpty = false;
-            result.needsReview = false;
-        } else {
-            result.verifiedEmpty = false;
-            result.needsReview = true;
-        }
-        result.validation = {
-            ...(result.validation || {}),
-            status: `manual_${result.reviewCategory}`,
-            verifiedEmpty: result.verifiedEmpty,
-            needsReview: result.needsReview,
-            estimatedCount: boxes.length,
-            reason: issue || reason
-        };
+        ReviewState.applyManualDecision(result, issue || reason);
     }
 
     function resultUrl(result) {
@@ -254,7 +224,7 @@
             <div class="rw-dialog" role="dialog" aria-modal="true" aria-labelledby="rwTitle">
                 <header class="rw-topbar">
                     <div class="rw-title">
-                        <h1 id="rwTitle">标注结果复核台</h1>
+                        <h1 id="rwTitle">任务台</h1><span class="rw-title-caption">标注复核</span>
                     </div>
                     <div class="rw-top-actions">
                         <button class="rw-button rw-button-ghost" data-rw-action="return-main" type="button">返回主页面</button>
@@ -273,8 +243,10 @@
                         <button class="rw-segment rw-active" data-rw-filter="all" type="button">全部</button>
                         <button class="rw-segment" data-rw-filter="normal" type="button">正常图</button>
                         <button class="rw-segment" data-rw-filter="background" type="button">背景图</button>
-                        <button class="rw-segment" data-rw-filter="error" type="button">异常图</button>
+                        <button class="rw-segment" data-rw-filter="error" type="button" title="包括识别失败和已有框待复核">待处理</button>
                     </div>
+                    <div class="rw-view-switch" role="group" aria-label="查看方式"><button data-rw-view="overview" type="button">纵览</button><button data-rw-view="single" type="button">单图</button></div>
+                    <div class="rw-display-switch"><button type="button" data-annotation-toggle="labels" aria-pressed="true">名称</button><button type="button" data-annotation-toggle="annotations" aria-pressed="true">标注</button></div>
                     <label class="rw-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m16 16 4 4"/></svg><input data-rw-search type="search" placeholder="搜索文件名…" autocomplete="off"></label>
                 </section>
                 <section class="rw-board">
@@ -293,6 +265,10 @@
         editorBackdrop = root.querySelector('.rw-editor-backdrop');
         editorBoxLayer = root.querySelector('.rw-editor-box-layer');
         editorImage = root.querySelector('.rw-editor-stage > img');
+        const stage = root.querySelector('.rw-editor-stage');
+        overlayRecords.set(stage, {image:editorImage, overlay:editorBoxLayer});
+        overlayObserver?.observe(stage);
+        window.AnnotationDisplay?.refreshControls();
     }
 
     function createLaneMarkup(category) {
@@ -305,30 +281,18 @@
     }
 
     function createEditorMarkup() {
-        return `<aside class="rw-editor-backdrop" aria-hidden="true">
-            <section class="rw-editor" role="dialog" aria-modal="true" aria-labelledby="rwEditorTitle">
-                <header class="rw-editor-head"><div><div class="rw-kicker">图片标注编辑器</div><h2 id="rwEditorTitle">—</h2></div><button class="rw-icon-button" data-rw-editor-close type="button" aria-label="关闭标注编辑器">×</button></header>
-                <div class="rw-editor-content">
-                    <div class="rw-editor-main">
-                        <div class="rw-editor-tools"><div class="rw-class-pill"><i></i><span data-rw-current-class>当前类别</span></div><span class="rw-editor-tip">拖动框移动 · 拖动右下角缩放</span><button class="rw-mini-button" data-rw-add-box type="button">＋ 添加标注框</button></div>
-                        <div class="rw-editor-stage"><img alt="当前复核图片"><div class="rw-editor-box-layer"></div><span class="rw-stage-size">原图尺寸读取中</span></div>
-                        <div class="rw-editor-nav"><button class="rw-mini-button" data-rw-editor-prev type="button">← 上一张</button><span data-rw-editor-position>0 / 0</span><button class="rw-mini-button" data-rw-editor-next type="button">下一张 →</button></div>
-                    </div>
-                    <aside class="rw-editor-side">
-                        <section class="rw-side-section"><label class="rw-field-label" for="rwCategorySelect">图片分类</label><select id="rwCategorySelect" class="rw-category-select">${CATEGORY_KEYS.map(key => `<option value="${key}">${CATEGORY_META[key].label}</option>`).join('')}</select><div class="rw-rule-message"></div></section>
-                        <section class="rw-side-section rw-side-grow"><div class="rw-section-title"><span>标注框</span><b data-rw-box-count>0 个</b></div><div class="rw-box-list"></div></section>
-                        <section class="rw-side-section rw-txt-section"><div class="rw-section-title"><span>TXT 实时预览</span><b data-rw-txt-size>0 KB</b></div><pre class="rw-txt-preview"></pre><p class="rw-txt-note">格式：类别 x中心 y中心 宽 高（归一化坐标）</p></section>
-                    </aside>
-                </div>
-                <footer class="rw-editor-foot"><div class="rw-autosave"><i></i>修改已实时写回当前任务</div><button class="rw-button rw-button-ghost" data-rw-editor-close type="button">关闭</button><button class="rw-button rw-button-primary" data-rw-editor-done type="button">完成并返回复核台</button></footer>
-            </section>
-        </aside>`;
+        return AnnotationEditor.markup(CATEGORY_KEYS.map(key => [key,CATEGORY_META[key].label]));
     }
 
     function bindEvents() {
         root.querySelectorAll('[data-rw-action="return-main"]').forEach(button => button.addEventListener('click', close));
         root.querySelectorAll('[data-rw-action="export"]').forEach(button => button.addEventListener('click', exportReviewedPackage));
         root.querySelectorAll('[data-rw-filter]').forEach(button => button.addEventListener('click', () => setFilter(button.dataset.rwFilter)));
+        root.querySelectorAll('[data-rw-view]').forEach(button => button.addEventListener('click', () => {
+            viewMode = button.dataset.rwView;
+            try { localStorage.setItem('review-view', viewMode); } catch (_) {}
+            render();
+        }));
         root.querySelector('[data-rw-search]').addEventListener('input', event => {
             searchTerm = event.target.value.trim().toLowerCase();
             CATEGORY_KEYS.forEach(category => deckIndices[category] = 0);
@@ -338,25 +302,13 @@
             root.querySelector(`[data-rw-prev="${category}"]`).addEventListener('click', () => flipLane(category, -1));
             root.querySelector(`[data-rw-next="${category}"]`).addEventListener('click', () => flipLane(category, 1));
         });
-        root.querySelectorAll('[data-rw-editor-close]').forEach(button => button.addEventListener('click', closeEditor));
-        root.querySelector('[data-rw-editor-done]').addEventListener('click', closeEditor);
-        root.querySelector('[data-rw-add-box]').addEventListener('click', addBox);
-        root.querySelector('[data-rw-editor-prev]').addEventListener('click', () => navigateEditor(-1));
-        root.querySelector('[data-rw-editor-next]').addEventListener('click', () => navigateEditor(1));
-        root.querySelector('#rwCategorySelect').addEventListener('change', event => {
-            if (!editingResult) return;
-            moveResult(editingResult, event.target.value, false);
-            renderEditorPanels();
-        });
-        editorBackdrop.addEventListener('click', event => {
-            if (event.target === editorBackdrop) closeEditor();
-        });
         document.addEventListener('keydown', event => {
-            if (event.key !== 'Escape') return;
-            if (editorBackdrop?.classList.contains('rw-open')) closeEditor();
-            else if (root?.classList.contains('rw-open')) close();
+            if (event.key === 'Escape' && !editor.result && root?.classList.contains('rw-open')) close();
         });
-        window.addEventListener('resize', layoutEditorImage);
+        window.addEventListener('resize', () => {
+            layoutEditorImage();
+            root.querySelectorAll('.rw-card-preview').forEach(preview => fitOverlayToContainedImage(preview.querySelector('img'), preview.querySelector('.rw-card-box-layer'), preview));
+        });
         const reopenButton = document.getElementById('reviewResultsBtn');
         if (reopenButton) reopenButton.addEventListener('click', () => {
             document.getElementById('fileMenu')?.classList.add('hidden');
@@ -373,6 +325,11 @@
     function render() {
         prepareResults();
         const results = currentResults();
+        root.dataset.view = viewMode;
+        root.querySelectorAll('[data-rw-view]').forEach(button => {
+            button.classList.toggle('rw-active', button.dataset.rwView === viewMode);
+            button.setAttribute('aria-pressed', String(button.dataset.rwView === viewMode));
+        });
         root.querySelector('[data-rw-total]').textContent = `共 ${results.length} 张图片`;
         CATEGORY_KEYS.forEach(category => {
             const count = results.filter(result => result.reviewCategory === category).length;
@@ -388,10 +345,12 @@
         conflictCard.classList.toggle('rw-visible', conflicts.length > 0);
         root.querySelector('[data-rw-conflict-count]').textContent = conflicts.length;
         const footerStatus = root.querySelector('.rw-footer-status');
+        const pending = results.filter(result => result.reviewCategory === 'error');
+        const pendingWithBoxes = pending.filter(result => ReviewState.assessment(result).hasValidBoxes).length;
         footerStatus.classList.toggle('rw-error', conflicts.length > 0);
         footerStatus.querySelector('span').textContent = conflicts.length
             ? `${conflicts.length} 张图片存在规则问题，导出时会自动放入 error`
-            : '所有图片符合当前分类规则';
+            : pending.length ? `${pending.length} 张待处理 · ${pendingWithBoxes} 张已有框可复核` : '分类规则校验通过，训练前仍需抽查';
         root.querySelectorAll('[data-rw-action="export"]').forEach(button => button.disabled = results.length === 0);
     }
 
@@ -439,14 +398,17 @@
 
     function renderLane(category) {
         const results = categoryResults(category);
-        const folderView = activeFilter !== 'all' && activeFilter === category;
+        const folderView = viewMode === 'overview';
         deckIndices[category] = clamp(deckIndices[category], 0, Math.max(0, results.length - 1));
         const activeIndex = deckIndices[category];
         const viewport = root.querySelector(`[data-rw-deck="${category}"]`);
+        viewport.dataset.renderRevision = String(Number(viewport.dataset.renderRevision || 0) + 1);
+        animatingDecks.delete(category);
         if (viewport.classList.contains('rw-folder-grid')) {
             folderScrollTops[category] = viewport.scrollTop;
         }
         viewport.classList.toggle('rw-folder-grid', folderView);
+        viewport.querySelectorAll('.rw-card-preview').forEach(preview => overlayObserver?.unobserve(preview));
         viewport.replaceChildren();
         if (!results.length) {
             const empty = document.createElement('div');
@@ -465,7 +427,8 @@
                 viewport.appendChild(card);
             });
         }
-        bindDeckViewport(viewport, category, !folderView);
+        bindDeckViewport(viewport, category);
+        viewport.closest('.rw-lane').classList.toggle('rw-overview-lane', folderView);
         if (folderView) {
             const wantedScrollTop = folderScrollTops[category] || 0;
             viewport.scrollTop = wantedScrollTop;
@@ -496,7 +459,7 @@
         const boxLayer = document.createElement('div');
         boxLayer.className = 'rw-card-box-layer';
         (result.annotations || []).forEach(annotation => {
-            if (!isValidBox(annotation)) return;
+            if (!ReviewState.validGeometry(annotation)) return;
             const [y1, x1, y2, x2] = annotation.box_2d.map(Number);
             const box = document.createElement('span');
             box.className = 'rw-card-box';
@@ -517,6 +480,8 @@
         editHint.textContent = '点击放大并修改标注框';
         preview.append(image, boxLayer, chip, conflict, editHint);
         image.addEventListener('load', () => fitOverlayToContainedImage(image, boxLayer, preview));
+        overlayRecords.set(preview, {image, overlay:boxLayer});
+        overlayObserver?.observe(preview);
         preview.addEventListener('click', () => openEditor(result));
 
         const info = document.createElement('div');
@@ -546,7 +511,8 @@
         const rawConfidence = result.validation?.confidence;
         const confidence = rawConfidence === null || rawConfidence === undefined ? NaN : Number(rawConfidence);
         const statusText = document.createElement('span');
-        statusText.textContent = result.reviewCategory === 'error' ? '状态：待人工复核'
+        const assessment = ReviewState.assessment(result);
+        statusText.textContent = result.reviewCategory === 'error' ? assessment.label
             : result.reviewCategory === 'background'
             ? '状态：确认无目标'
             : Number.isFinite(confidence) ? `复核置信度：${Math.round(confidence * 100)}%`
@@ -566,7 +532,20 @@
         });
         select.value = category;
         select.addEventListener('change', event => moveResult(result, event.target.value, true));
-        info.append(nameRow, meta, select);
+        const decision = document.createElement('div'); decision.className = 'rw-card-decision'; decision.append(select);
+        if (assessment.requiresReview && assessment.hasValidBoxes) {
+            const confirm = document.createElement('button'); confirm.type = 'button'; confirm.className = 'rw-confirm-existing';
+            confirm.textContent = '确认现有框'; confirm.title = '人工确认现有框可用，移入正常图；保留原自动复核依据';
+            confirm.addEventListener('click', () => moveResult(result, 'normal', true)); decision.append(confirm);
+        }
+        info.append(nameRow, meta);
+        if (assessment.requiresReview) {
+            const note = document.createElement('details'); note.className = 'rw-card-reason';
+            const summary = document.createElement('summary'); summary.textContent = assessment.reason || '没有可确认的完整标注结果'; summary.title = '点击展开完整原因';
+            const detail = document.createElement('p'); detail.textContent = assessment.reason || '请检查图片、目标框及处理记录。';
+            note.append(summary, detail); info.append(note);
+        }
+        info.append(decision);
         card.append(preview, info);
         card.addEventListener('dragstart', event => {
             draggedReviewId = getResultId(result);
@@ -594,18 +573,17 @@
         overlay.style.height = `${height}px`;
     }
 
-    function bindDeckViewport(viewport, category, enableMechanicalFlip = true) {
-        if (enableMechanicalFlip) {
-            viewport.addEventListener('wheel', event => {
-                event.preventDefault();
-                const wheel = wheelStates[category];
-                clearTimeout(wheel.timer);
-                wheel.timer = setTimeout(() => { wheel.armed = true; }, 190);
-                if (!wheel.armed || Math.abs(event.deltaY) < 7) return;
-                wheel.armed = false;
-                flipLane(category, event.deltaY > 0 ? 1 : -1);
-            }, { passive: false });
-        }
+    function bindDeckViewport(viewport, category) {
+        if (viewport.dataset.eventsBound) return;
+        viewport.dataset.eventsBound = 'true';
+        // One listener per persistent viewport; overview scrolling never flips cards.
+        let lastFlip = 0;
+        viewport.addEventListener('wheel', event => {
+            if (viewMode !== 'single' || event.target.closest('select,input,textarea,details')) return;
+            event.preventDefault();
+            if (Math.abs(event.deltaY) < 7 || performance.now() - lastFlip < 220) return;
+            lastFlip = performance.now(); flipLane(category, event.deltaY > 0 ? 1 : -1);
+        }, { passive: false });
         viewport.addEventListener('dragover', event => {
             event.preventDefault();
             event.dataTransfer.dropEffect = 'move';
@@ -624,6 +602,7 @@
     }
 
     function flipLane(category, delta) {
+        if (viewMode !== 'single') return;
         if (animatingDecks.has(category)) return;
         const results = categoryResults(category);
         const currentIndex = clamp(deckIndices[category], 0, Math.max(0, results.length - 1));
@@ -647,6 +626,7 @@
             return;
         }
         animatingDecks.add(category);
+        const renderRevision = viewport.dataset.renderRevision;
         currentCard.classList.add(
             'rw-card-exiting',
             delta > 0 ? 'rw-exit-up' : 'rw-exit-down'
@@ -673,8 +653,10 @@
             settled = true;
             if (fallbackTimer) clearTimeout(fallbackTimer);
             targetCard.removeEventListener('transitionend', onTransitionEnd);
-            settleMechanicalDeck(category, results, targetIndex, viewport);
-            animatingDecks.delete(category);
+            if (viewMode === 'single' && viewport.dataset.renderRevision === renderRevision) {
+                settleMechanicalDeck(category, results, targetIndex, viewport);
+                animatingDecks.delete(category);
+            }
         };
         const onTransitionEnd = event => {
             if (event.target === targetCard && event.propertyName === 'transform') settle();
@@ -716,7 +698,7 @@
             deckIndices[finalCategory] = Math.max(0, destinationResults.indexOf(result));
         }
         render();
-        if (editingResult === result) renderEditor();
+        if (editor.result === result) renderEditor();
         if (notify) {
             showToast(finalCategory === category
                 ? `已把 ${fileNameFor(result)} 移到“${CATEGORY_META[category].label}”`
@@ -738,11 +720,8 @@
         const objectUrl = objectUrls.get(result);
         if (objectUrl) URL.revokeObjectURL(objectUrl);
 
-        if (editingResult === result) {
-            editorBackdrop.classList.remove('rw-open');
-            editorBackdrop.setAttribute('aria-hidden', 'true');
-            editingResult = null;
-        }
+        if (editor.result === result) editor.close();
+        editor.undoStack = []; editor.redoStack = [];
 
         if (typeof renderFileList === 'function') renderFileList();
         if (state.files.length && typeof switchFile === 'function') {
@@ -767,235 +746,11 @@
         showToast(`已从任务中删除 ${fileName}`);
     }
 
-    function openEditor(result) {
-        editingResult = result;
-        selectedBoxIndex = 0;
-        editorBackdrop.classList.add('rw-open');
-        editorBackdrop.setAttribute('aria-hidden', 'false');
-        renderEditor();
-    }
-
-    function closeEditor() {
-        if (!editingResult) return;
-        const changedResult = editingResult;
-        editorBackdrop.classList.remove('rw-open');
-        editorBackdrop.setAttribute('aria-hidden', 'true');
-        editingResult = null;
-        render();
-        syncMainPage(changedResult);
-    }
-
-    function renderEditor() {
-        if (!editingResult) return;
-        selectedBoxIndex = clamp(selectedBoxIndex, 0, Math.max(0, editingResult.annotations.length - 1));
-        root.querySelector('#rwEditorTitle').textContent = fileNameFor(editingResult);
-        root.querySelector('#rwCategorySelect').value = editingResult.reviewCategory;
-        const all = currentResults();
-        const resultIndex = all.indexOf(editingResult);
-        root.querySelector('[data-rw-editor-position]').textContent = `${resultIndex + 1} / ${all.length}`;
-        const currentClass = editingResult.annotations[selectedBoxIndex]?.label || getDefaultLabel();
-        root.querySelector('[data-rw-current-class]').textContent = `类别 · ${currentClass}`;
-        editorImage.onload = () => {
-            layoutEditorImage();
-            root.querySelector('.rw-stage-size').textContent = `${editorImage.naturalWidth} × ${editorImage.naturalHeight}`;
-        };
-        editorImage.src = resultUrl(editingResult);
-        renderEditorBoxes();
-        renderEditorPanels();
-    }
-
-    function layoutEditorImage() {
-        if (!editorImage || !editorBoxLayer || !editorImage.naturalWidth || !editorImage.naturalHeight) return;
-        const stage = root?.querySelector('.rw-editor-stage');
-        if (!stage) return;
-        fitOverlayToContainedImage(editorImage, editorBoxLayer, stage);
-    }
-
-    function renderEditorBoxes() {
-        editorBoxLayer.replaceChildren();
-        if (!editingResult) return;
-        editingResult.annotations.forEach((annotation, index) => {
-            if (!isValidBox(annotation)) return;
-            const [rawY1, rawX1, rawY2, rawX2] = annotation.box_2d.map(Number);
-            const y1 = clamp(Math.min(rawY1, rawY2), 0, 1000);
-            const x1 = clamp(Math.min(rawX1, rawX2), 0, 1000);
-            const y2 = clamp(Math.max(rawY1, rawY2), 0, 1000);
-            const x2 = clamp(Math.max(rawX1, rawX2), 0, 1000);
-            annotation.box_2d = [y1, x1, y2, x2];
-            const box = document.createElement('div');
-            box.className = `rw-editor-box${index === selectedBoxIndex ? ' rw-selected' : ''}`;
-            box.dataset.boxIndex = index;
-            applyEditorBoxStyle(box, annotation);
-            const label = document.createElement('span');
-            label.className = 'rw-editor-box-label';
-            label.textContent = `${getClassId(annotation.label)} · ${annotation.label} #${index + 1}`;
-            const handle = document.createElement('span');
-            handle.className = 'rw-resize-handle';
-            box.append(label, handle);
-            box.addEventListener('pointerdown', event => startBoxGesture(event, index, 'move'));
-            handle.addEventListener('pointerdown', event => {
-                event.stopPropagation();
-                startBoxGesture(event, index, 'resize');
-            });
-            editorBoxLayer.appendChild(box);
-        });
-    }
-
-    function applyEditorBoxStyle(element, annotation) {
-        const [y1, x1, y2, x2] = annotation.box_2d;
-        element.style.left = `${x1 / 10}%`;
-        element.style.top = `${y1 / 10}%`;
-        element.style.width = `${(x2 - x1) / 10}%`;
-        element.style.height = `${(y2 - y1) / 10}%`;
-    }
-
-    function startBoxGesture(event, index, mode) {
-        event.preventDefault();
-        if (!editingResult) return;
-        const annotation = editingResult.annotations[index];
-        const startBox = annotation.box_2d.map(Number);
-        const startX = event.clientX;
-        const startY = event.clientY;
-        const layerRect = editorBoxLayer.getBoundingClientRect();
-        const element = editorBoxLayer.querySelector(`[data-box-index="${index}"]`);
-        selectedBoxIndex = index;
-        editorBoxLayer.querySelectorAll('.rw-editor-box').forEach(node => node.classList.remove('rw-selected'));
-        element.classList.add('rw-selected');
-        renderEditorPanels();
-        const onMove = moveEvent => {
-            const dx = ((moveEvent.clientX - startX) / layerRect.width) * 1000;
-            const dy = ((moveEvent.clientY - startY) / layerRect.height) * 1000;
-            const [startY1, startX1, startY2, startX2] = startBox;
-            if (mode === 'move') {
-                const width = startX2 - startX1;
-                const height = startY2 - startY1;
-                const x1 = clamp(startX1 + dx, 0, 1000 - width);
-                const y1 = clamp(startY1 + dy, 0, 1000 - height);
-                annotation.box_2d = [y1, x1, y1 + height, x1 + width];
-            } else {
-                annotation.box_2d = [
-                    startY1,
-                    startX1,
-                    clamp(startY2 + dy, startY1 + 3, 1000),
-                    clamp(startX2 + dx, startX1 + 3, 1000)
-                ];
-            }
-            discardStalePreviews(annotation);
-            syncResultFlags(editingResult, '人工修改了标注框');
-            applyEditorBoxStyle(element, annotation);
-            renderEditorPanels();
-        };
-        const onUp = () => {
-            window.removeEventListener('pointermove', onMove);
-            window.removeEventListener('pointerup', onUp);
-            renderEditorBoxes();
-            render();
-        };
-        window.addEventListener('pointermove', onMove);
-        window.addEventListener('pointerup', onUp, { once: true });
-    }
-
-    function discardStalePreviews(annotation) {
-        delete annotation.polygon;
-        delete annotation.previewDataUrl;
-        delete annotation.transparentPreviewUrl;
-    }
-
-    function renderEditorPanels() {
-        if (!editingResult) return;
-        const issue = issueFor(editingResult);
-        const message = root.querySelector('.rw-rule-message');
-        message.classList.toggle('rw-error', Boolean(issue));
-        message.textContent = issue || (editingResult.reviewCategory === 'normal'
-            ? '符合规则：图片和包含标注行的 TXT 将保存到 normal。'
-            : editingResult.reviewCategory === 'background'
-                ? '符合规则：图片和 0 KB 空 TXT 将保存到 background。'
-                : '该图片会完整保存到 error；可以保留现有框，也可以继续人工修改。');
-        root.querySelector('[data-rw-box-count]').textContent = `${editingResult.annotations.length} 个`;
-        const list = root.querySelector('.rw-box-list');
-        list.replaceChildren();
-        if (!editingResult.annotations.length) {
-            const empty = document.createElement('div');
-            empty.className = 'rw-empty-boxes';
-            empty.innerHTML = '当前没有标注框<br>可点击“添加标注框”手动补充';
-            list.appendChild(empty);
-        } else {
-            editingResult.annotations.forEach((annotation, index) => {
-                const row = document.createElement('div');
-                row.className = `rw-box-row${index === selectedBoxIndex ? ' rw-selected' : ''}`;
-                const number = document.createElement('span');
-                number.className = 'rw-box-index';
-                number.textContent = index + 1;
-                const copy = document.createElement('span');
-                copy.className = 'rw-box-copy';
-                const label = document.createElement('b');
-                label.textContent = annotation.label || '未命名类别';
-                const coordinates = document.createElement('span');
-                coordinates.textContent = Array.isArray(annotation.box_2d)
-                    ? `y1 ${Number(annotation.box_2d[0]).toFixed(1)} · x1 ${Number(annotation.box_2d[1]).toFixed(1)} · y2 ${Number(annotation.box_2d[2]).toFixed(1)} · x2 ${Number(annotation.box_2d[3]).toFixed(1)}`
-                    : '无效坐标';
-                copy.append(label, coordinates);
-                const remove = document.createElement('button');
-                remove.type = 'button';
-                remove.className = 'rw-delete-box';
-                remove.setAttribute('aria-label', `删除第 ${index + 1} 个标注框`);
-                remove.textContent = '×';
-                remove.addEventListener('click', event => {
-                    event.stopPropagation();
-                    deleteBox(index);
-                });
-                row.append(number, copy, remove);
-                row.addEventListener('click', () => {
-                    selectedBoxIndex = index;
-                    renderEditorBoxes();
-                    renderEditorPanels();
-                });
-                list.appendChild(row);
-            });
-        }
-        const text = yoloTextFor(editingResult);
-        root.querySelector('.rw-txt-preview').textContent = text;
-        root.querySelector('[data-rw-txt-size]').textContent = text ? `${textBytes(text)} B` : '0 KB';
-    }
-
-    function getDefaultLabel() {
-        const manual = String(els?.classLabelInput?.value || '').trim().split(/\s+/).filter(Boolean);
-        if (manual.length) return manual[0];
-        const classes = getAllClasses().filter(Boolean);
-        return classes[0] || 'object';
-    }
-
-    function addBox() {
-        if (!editingResult) return;
-        const label = getDefaultLabel();
-        getClassId(label);
-        editingResult.annotations.push({ label, box_2d: [410, 420, 590, 580], manual: true });
-        editingResult.reviewCategory = editingResult.reviewCategory === 'background' ? 'error' : editingResult.reviewCategory;
-        selectedBoxIndex = editingResult.annotations.length - 1;
-        syncResultFlags(editingResult, '人工新增了标注框');
-        renderEditor();
-        render();
-        showToast('已添加标注框，TXT 已同步更新');
-    }
-
-    function deleteBox(index) {
-        if (!editingResult) return;
-        editingResult.annotations.splice(index, 1);
-        selectedBoxIndex = clamp(index - 1, 0, Math.max(0, editingResult.annotations.length - 1));
-        syncResultFlags(editingResult, '人工删除了标注框');
-        renderEditor();
-        render();
-        showToast('标注框已删除，TXT 已同步更新');
-    }
-
-    function navigateEditor(delta) {
-        const all = currentResults();
-        const index = all.indexOf(editingResult);
-        if (index < 0 || !all.length) return;
-        editingResult = all[(index + delta + all.length) % all.length];
-        selectedBoxIndex = 0;
-        renderEditor();
-    }
+    function openEditor(result) { editor.open(result); }
+    function closeEditor() { editor.close(); }
+    function renderEditor() { editor.render(); }
+    function renderEditorPanels() { editor.renderPanels(); }
+    function layoutEditorImage() { editor.layout(); }
 
     function syncMainPage(result) {
         const selected = state.files.findIndex(file => file === result.file || file.name === result.fileName);
@@ -1092,13 +847,20 @@
                 labelPath: `${folder}/labels/${labelName}`,
                 annotationCount: validAnnotationCount,
                 rawAnnotationCount: result.annotations.length,
+                annotations: clone(result.annotations),
                 txtBytes: textBytes(text),
                 verifiedEmpty: result.verifiedEmpty === true,
                 needsReview: result.needsReview === true,
                 manualReviewed: result.manualReviewed === true,
                 processingError: result.processingError || null,
                 validationStatus: result.validation?.status || null,
-                validationReason: result.validation?.reason || null
+                validationReason: result.validation?.reason || null,
+                modelsUsed: result.validation?.modelsUsed || [],
+                providersUsed: result.validation?.providersUsed || [],
+                automaticAssessment: result.automaticAssessment || null,
+                reviewHistory: result.reviewHistory || [],
+                numberRecognition: result.numberRecognition || { status: 'disabled', numbers: [], sequence: null },
+                jsonRetries: result.validation?.jsonRetries || 0
             });
         }
         zip.file('review_manifest.json', JSON.stringify(manifest, null, 2));
@@ -1188,6 +950,7 @@
 
     function open() {
         init();
+        if (state?.isProcessing) { alert('识别正在进行，结束后可在任务台人工复核。'); return false; }
         if (state?.isVideoMode) {
             alert('当前复核台先用于图片 YOLO 标注；视频帧复核将在后续版本单独设计。');
             return false;
@@ -1287,6 +1050,8 @@
     function init() {
         if (initialized) return;
         createRoot();
+        editor = new AnnotationEditor.Editor({root, results:currentResults, notify:showToast, syncFlags:syncResultFlags,
+            changed:syncMainPage, renderBoard:render, url:resultUrl, fit:fitOverlayToContainedImage, issue:issueFor, text:yoloTextFor});
         bindEvents();
         initialized = true;
     }
@@ -1298,6 +1063,11 @@
         render,
         buildReviewedPackage,
         exportReviewedPackage,
+        editCurrent() {
+            if (!open({reason:'manual-annotation'})) return;
+            const result = currentResults().find(item => item.file === state.file || item.fileName === state.file?.name);
+            if (result) openEditor(result);
+        },
         lastDemoExport: null
     };
 

@@ -22,14 +22,14 @@ class ConfigurationRegressions(unittest.TestCase):
             store=SettingsStore(Path(temp)/'settings.json')
             store.update({'api_url':'https://example.invalid/','api_key':'fake-test-key','model':'test','proxy_url':''})
             saved=json.loads(store.path.read_text(encoding='utf-8'))
-            saved['api_url']='https://example.invalid/v1'
+            saved['profiles'][0]['api_url']='https://example.invalid/v1'
             store.path.write_text(json.dumps(saved),encoding='utf-8')
             original=store.path.read_bytes()
             self.assertEqual(store.runtime()['api_url'],'https://example.invalid/v1/chat/completions')
             self.assertEqual(store.public()['api_url'],'https://example.invalid/v1/chat/completions')
             self.assertEqual(store.path.read_bytes(),original)
             self.assertEqual(store.runtime()['api_key'],'fake-test-key')
-            with self.assertRaises(ValueError):store.update({'api_url':'https://example.invalid/v1/responses','model':'test'})
+            self.assertEqual(store.update({'api_url':'https://example.invalid/v1/responses','model':'test'})['protocol'],'responses')
 
     def test_response_validation(self):
         for value in [b'<!doctype html><title>gateway</title>',b'{}',b'{"choices":[]}',b'{"choices":[{"message":{"content":""}}]}',b'{"choices":[{"message":{"content":"[]"},"finish_reason":"length"}]}']:
